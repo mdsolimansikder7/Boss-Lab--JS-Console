@@ -44,4 +44,14 @@
   background-color: rgba(56, 189, 248, 0.3);
   color: #ffffff;
 }
+.error-line-highlight {
+  background-color: rgba(255, 82, 82, 0.15);
+}
+
+.error-line-glyph::before {
+  content: '●';
+  color: #ff5252;
+  font-size: 14px;
+  margin-left: 6px;
+}
 

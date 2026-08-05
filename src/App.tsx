@@ -47,6 +47,7 @@ export default function App() {
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [executionTime, setExecutionTime] = useState<number | undefined>(undefined);
   const [isCopiedShare, setIsCopiedShare] = useState<boolean>(false);
+  const [errorLine, setErrorLine] = useState<number | undefined>(undefined);
 
   // Modals state
   const [isSnippetsModalOpen, setIsSnippetsModalOpen] = useState<boolean>(false);
@@ -110,6 +111,7 @@ export default function App() {
     setIsRunning(true);
     setStatus('Running...');
     setLogs([]); // Clear output on new run
+    setErrorLine(undefined); // Clear previous error highlight
 
     // Switch to console tab automatically on mobile view so output is visible
     if (window.innerWidth < 768) {
@@ -118,6 +120,9 @@ export default function App() {
 
     const result = await evaluateJavaScript(code, (entry) => {
       setLogs(prev => [...prev, entry]);
+      if (entry.type === 'error' && entry.line) {
+        setErrorLine(entry.line);
+      }
     });
 
     setIsRunning(false);
@@ -135,6 +140,7 @@ export default function App() {
     setLogs([]);
     setExecutionTime(undefined);
     setStatus('Ready');
+    setErrorLine(undefined);
   };
 
   // REPL Single Line Execution
@@ -150,6 +156,13 @@ export default function App() {
   const handleSelectSnippet = (snippet: Snippet) => {
     setCode(snippet.code);
     setStatus(`Loaded '${snippet.title}'`);
+    setErrorLine(undefined);
+  };
+
+  // Wraps setCode so any manual edit also clears a stale error highlight
+  const handleCodeChange = (newCode: string) => {
+    setCode(newCode);
+    if (errorLine !== undefined) setErrorLine(undefined);
   };
 
   // Save current code as custom snippet
@@ -252,12 +265,13 @@ export default function App() {
             <CodeEditor
               ref={editorRef}
               code={code}
-              setCode={setCode}
+              setCode={handleCodeChange}
               onRun={handleRunCode}
               settings={settings}
               theme={currentThemeConfig}
               cursorLine={cursorLine}
               setCursorLine={setCursorLine}
+              errorLine={errorLine}
             />
           </div>
         )}

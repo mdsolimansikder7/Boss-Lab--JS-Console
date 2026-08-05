@@ -7,6 +7,23 @@ export interface ExecutionResult {
   returnValue?: any;
 }
 
+// The runner wraps user code like this before executing it via `new Function(...)`:
+//
+//   function anonymous(console,fetch,setTimeout,setInterval,clearTimeout,clearInterval,performance
+//   ) {
+//   return (async () => {
+//     <user code line 1>
+//     <user code line 2>
+//     ...
+//   })();
+//   }
+//
+// V8 always adds 2 header lines for the function signature, plus our own
+// "return (async () => {" wrapper line — so user code line N always starts
+// at internal line (N + 3). This offset is what lets us map a runtime error's
+// internal line number back to the exact line the user actually wrote.
+const WRAPPER_LINE_OFFSET = 3;
+
 // Helper to extract the exact line number from an error
 export function extractErrorLine(err: any, code: string): number | undefined {
   if (!err) return undefined;
@@ -15,7 +32,7 @@ export function extractErrorLine(err: any, code: string): number | undefined {
 
   // Direct line number property (Firefox / Safari / V8 extensions)
   if (typeof err.lineNumber === 'number' && err.lineNumber > 0) {
-    const line = err.lineNumber - 1;
+    const line = err.lineNumber - WRAPPER_LINE_OFFSET;
     if (line >= 1 && line <= totalLines) return line;
   }
 
@@ -26,7 +43,7 @@ export function extractErrorLine(err: any, code: string): number | undefined {
     const anonMatches = [...stack.matchAll(/<anonymous>:(\d+):(\d+)/g)];
     for (const match of anonMatches) {
       const rawLine = parseInt(match[1], 10);
-      const userLine = rawLine - 1; // Subtract 1 for wrapper line
+      const userLine = rawLine - WRAPPER_LINE_OFFSET;
       if (userLine >= 1 && userLine <= totalLines) {
         return userLine;
       }
@@ -36,7 +53,7 @@ export function extractErrorLine(err: any, code: string): number | undefined {
     const fnMatches = [...stack.matchAll(/(?:eval|Function):(\d+):(\d+)/gi)];
     for (const match of fnMatches) {
       const rawLine = parseInt(match[1], 10);
-      const userLine = rawLine - 1;
+      const userLine = rawLine - WRAPPER_LINE_OFFSET;
       if (userLine >= 1 && userLine <= totalLines) {
         return userLine;
       }

@@ -1,4 +1,4 @@
-import React, { useRef, useState, useImperativeHandle, forwardRef } from 'react';
+import React, { useRef, useState, useEffect, useImperativeHandle, forwardRef } from 'react';
 import Editor, { OnMount } from '@monaco-editor/react';
 import type * as MonacoTypes from 'monaco-editor';
 import { FileCode, Search, Wand2, Copy, Check } from 'lucide-react';
@@ -12,6 +12,7 @@ interface CodeEditorProps {
   theme: ThemeConfig;
   cursorLine: number;
   setCursorLine: (line: number) => void;
+  errorLine?: number;
 }
 
 export interface CodeEditorRef {
@@ -26,10 +27,13 @@ export const CodeEditor = forwardRef<CodeEditorRef, CodeEditorProps>(({
   settings,
   theme,
   cursorLine,
-  setCursorLine
+  setCursorLine,
+  errorLine
 }, ref) => {
   // Holds the live Monaco editor instance (replaces the old textareaRef)
   const editorInstanceRef = useRef<MonacoTypes.editor.IStandaloneCodeEditor | null>(null);
+  const monacoInstanceRef = useRef<typeof MonacoTypes | null>(null);
+  const decorationsRef = useRef<string[]>([]);
   const [copied, setCopied] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
@@ -102,6 +106,7 @@ export const CodeEditor = forwardRef<CodeEditorRef, CodeEditorProps>(({
   // both of which the old textarea did manually, Monaco gives us hooks for instead.
   const handleEditorMount: OnMount = (editorInstance, monaco) => {
     editorInstanceRef.current = editorInstance;
+    monacoInstanceRef.current = monaco;
 
     editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
       onRun();
@@ -111,6 +116,47 @@ export const CodeEditor = forwardRef<CodeEditorRef, CodeEditorProps>(({
       setCursorLine(e.position.lineNumber);
     });
   };
+
+  // Highlights the exact line where a runtime error occurred (red gutter dot + line tint)
+  useEffect(() => {
+    const editor = editorInstanceRef.current;
+    const monacoNs = monacoInstanceRef.current;
+    if (!editor || !monacoNs) return;
+
+    const model = editor.getModel();
+    if (!model) return;
+
+    if (errorLine && errorLine >= 1 && errorLine <= model.getLineCount()) {
+      const lineLength = model.getLineMaxColumn(errorLine);
+
+      monacoNs.editor.setModelMarkers(model, 'js-console-runtime', [
+        {
+          startLineNumber: errorLine,
+          startColumn: 1,
+          endLineNumber: errorLine,
+          endColumn: lineLength,
+          message: 'Execution error occurred on this line',
+          severity: monacoNs.MarkerSeverity.Error,
+        },
+      ]);
+
+      decorationsRef.current = editor.deltaDecorations(decorationsRef.current, [
+        {
+          range: new monacoNs.Range(errorLine, 1, errorLine, 1),
+          options: {
+            isWholeLine: true,
+            className: 'error-line-highlight',
+            glyphMarginClassName: 'error-line-glyph',
+          },
+        },
+      ]);
+
+      editor.revealLineInCenter(errorLine);
+    } else {
+      monacoNs.editor.setModelMarkers(model, 'js-console-runtime', []);
+      decorationsRef.current = editor.deltaDecorations(decorationsRef.current, []);
+    }
+  }, [errorLine]);
 
   return (
     <div 
@@ -201,7 +247,7 @@ export const CodeEditor = forwardRef<CodeEditorRef, CodeEditorProps>(({
         </div>
       )}
 
-      {/* Main Code Editing Canvas — now Monaco instead of a plain textarea */}
+      {/* Main Code Editing Canvas — Monaco, with error-line gutter enabled */}
       <div className="flex-1 overflow-hidden relative">
         <Editor
           height="100%"
@@ -220,6 +266,7 @@ export const CodeEditor = forwardRef<CodeEditorRef, CodeEditorProps>(({
             minimap: { enabled: false },
             scrollBeyondLastLine: false,
             automaticLayout: true,
+            glyphMargin: true,
             padding: { top: 12 },
           }}
         />
