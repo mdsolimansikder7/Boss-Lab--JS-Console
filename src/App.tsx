@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Analytics } from '@vercel/analytics/react';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 import { LogEntry, Snippet, ThemeId, EditorSettings, LayoutMode } from './types';
 import { THEMES } from './utils/theme';
 import { DEFAULT_SNIPPETS } from './data/snippets';
@@ -321,6 +323,9 @@ export default function App() {
         setSettings={setSettings}
         theme={currentThemeConfig}
       />
+
+      <Analytics />
+      <SpeedInsights />
     </div>
   );
 }
