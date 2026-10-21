@@ -1,10 +1,14 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Analytics } from '@vercel/analytics/react';
 import { SpeedInsights } from '@vercel/speed-insights/react';
-import { LogEntry, Snippet, ThemeId, EditorSettings, LayoutMode } from './types';
-import { THEMES } from './utils/theme';
+import { LayoutMode, LogEntry, Snippet, ThemeId, EditorSettings, LanguageId } from './types';
+import { THEMES, themeCssVars, withAlpha } from './utils/theme';
 import { DEFAULT_SNIPPETS } from './data/snippets';
-import { evaluateJavaScript } from './utils/evaluator';
+import { runCode } from './utils/runner';
+import { LANGUAGES, isLanguageId, sanitizeFileName } from './utils/languages';
+import { loadEditorSettings } from './utils/settings';
+import { loadJSON, loadString, saveJSON, saveString, STORAGE_KEYS } from './utils/storage';
+import { copyText } from './utils/clipboard';
 import { Header } from './components/Header';
 import { CodeEditor, CodeEditorRef } from './components/CodeEditor';
 import { ConsoleOutput } from './components/ConsoleOutput';
@@ -12,230 +16,420 @@ import { InteractiveRepl } from './components/InteractiveRepl';
 import { SnippetsModal } from './components/SnippetsModal';
 import { SettingsModal } from './components/SettingsModal';
 import { Footer } from './components/Footer';
+import { Toast, ToastMessage, ToastTone } from './components/Toast';
 
-const STORAGE_KEY_CODE = 'js_console_saved_code';
-const STORAGE_KEY_SNIPPETS = 'js_console_custom_snippets';
-const STORAGE_KEY_THEME = 'js_console_theme';
-const STORAGE_KEY_SETTINGS = 'js_console_settings';
+const VALID_LAYOUTS: LayoutMode[] = ['split', 'editor-only', 'console-only', 'stacked'];
+
+/**
+ * Read `#code=<base64>&lang=python` from the URL. Base64 can contain "+" and
+ * "=", so the hash is split by hand instead of URLSearchParams (which turns
+ * "+" into a space and would corrupt shared snippets).
+ */
+function readSharedSnippet(): { code: string; language: LanguageId } | null {
+  const hash = window.location.hash.replace(/^#/, '');
+  if (!hash) return null;
+
+  const parts = hash.split('&');
+  const codePart = parts.find((part) => part.startsWith('code='));
+  if (!codePart) return null;
+
+  try {
+    const decoded = decodeURIComponent(atob(codePart.slice(5)));
+    const langPart = parts.find((part) => part.startsWith('lang='));
+    const language = langPart ? langPart.slice(5) : 'javascript';
+    return {
+      code: decoded,
+      language: isLanguageId(language) ? language : 'javascript',
+    };
+  } catch (error) {
+    console.error('Failed to decode shared code from URL:', error);
+    return null;
+  }
+}
+
+const INITIAL_SHARE = typeof window === 'undefined' ? null : readSharedSnippet();
+
+function buildInitialCodeMap(shared: { code: string; language: LanguageId } | null) {
+  const stored = loadJSON<Partial<Record<LanguageId, string>>>(STORAGE_KEYS.codeMap, {});
+  const legacyJavascript = loadString(STORAGE_KEYS.code, '');
+
+  const map: Record<LanguageId, string> = {
+    javascript: stored.javascript ?? (legacyJavascript || LANGUAGES.javascript.template),
+    python: stored.python ?? LANGUAGES.python.template,
+    cpp: stored.cpp ?? LANGUAGES.cpp.template,
+    c: stored.c ?? LANGUAGES.c.template,
+  };
+
+  if (shared) map[shared.language] = shared.code;
+  return map;
+}
+
+function buildInitialFileNames(): Record<LanguageId, string> {
+  const stored = loadJSON<Partial<Record<LanguageId, string>>>(STORAGE_KEYS.fileNames, {});
+  const saved = stored && typeof stored === 'object' ? stored : {};
+
+  return {
+    javascript: sanitizeFileName(saved.javascript ?? LANGUAGES.javascript.fileName, LANGUAGES.javascript.fileName),
+    python: sanitizeFileName(saved.python ?? LANGUAGES.python.fileName, LANGUAGES.python.fileName),
+    cpp: sanitizeFileName(saved.cpp ?? LANGUAGES.cpp.fileName, LANGUAGES.cpp.fileName),
+    c: sanitizeFileName(saved.c ?? LANGUAGES.c.fileName, LANGUAGES.c.fileName),
+  };
+}
 
 export default function App() {
   const editorRef = useRef<CodeEditorRef>(null);
 
   // App state
-  const [code, setCode] = useState<string>(() => {
-    // Check URL Hash first for shared snippets
-    if (window.location.hash.startsWith('#code=')) {
-      try {
-        const encoded = window.location.hash.replace('#code=', '');
-        return decodeURIComponent(atob(encoded));
-      } catch (e) {
-        console.error("Failed to decode shared code from URL:", e);
-      }
-    }
-    return localStorage.getItem(STORAGE_KEY_CODE) || DEFAULT_SNIPPETS[0].code;
+  const [language, setLanguageState] = useState<LanguageId>(() => {
+    if (INITIAL_SHARE) return INITIAL_SHARE.language;
+    const saved = loadString(STORAGE_KEYS.language, 'javascript');
+    return isLanguageId(saved) ? saved : 'javascript';
   });
+
+  const [codeMap, setCodeMap] = useState<Record<LanguageId, string>>(() =>
+    buildInitialCodeMap(INITIAL_SHARE)
+  );
+  const [fileNames, setFileNames] = useState<Record<LanguageId, string>>(buildInitialFileNames);
+
+  const code = codeMap[language];
+  const fileName = fileNames[language];
 
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [theme, setTheme] = useState<ThemeId>(() => {
-    return (localStorage.getItem(STORAGE_KEY_THEME) as ThemeId) || 'midnight';
+    const saved = loadString(STORAGE_KEYS.theme, 'midnight') as ThemeId;
+    return THEMES[saved] ? saved : 'midnight';
   });
 
-  const [layoutMode, setLayoutMode] = useState<LayoutMode>('split');
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>(() => {
+    const saved = loadString(STORAGE_KEYS.layout, 'split') as LayoutMode;
+    return VALID_LAYOUTS.includes(saved) ? saved : 'split';
+  });
+
   const [mobileTab, setMobileTab] = useState<'editor' | 'console'>('editor');
   const [cursorLine, setCursorLine] = useState<number>(1);
-  const [status, setStatus] = useState<string>('Ready');
+  const [status, setStatus] = useState<string>(INITIAL_SHARE ? 'Shared snippet loaded' : 'Ready');
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [executionTime, setExecutionTime] = useState<number | undefined>(undefined);
   const [isCopiedShare, setIsCopiedShare] = useState<boolean>(false);
   const [errorLine, setErrorLine] = useState<number | undefined>(undefined);
 
-  // Modals state
+  // Modals
   const [isSnippetsModalOpen, setIsSnippetsModalOpen] = useState<boolean>(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState<boolean>(false);
 
-  // Editor Settings state
-  const [settings, setSettings] = useState<EditorSettings>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_SETTINGS);
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        // fallback
-      }
-    }
-    return {
-      fontSize: 14,
-      tabSize: 2,
-      autoCloseBrackets: true,
-      wordWrap: false,
-      lineNumbers: true,
-      showLineHighlight: true
-    };
-  });
+  // Editor settings
+  const [settings, setSettings] = useState<EditorSettings>(() => loadEditorSettings());
 
-  // Custom user snippets state
+  // Custom user snippets
   const [snippets, setSnippets] = useState<Snippet[]>(() => {
-    const customSaved = localStorage.getItem(STORAGE_KEY_SNIPPETS);
-    if (customSaved) {
-      try {
-        const parsed = JSON.parse(customSaved);
-        return [...DEFAULT_SNIPPETS, ...parsed];
-      } catch (e) {
-        // fallback
-      }
-    }
-    return DEFAULT_SNIPPETS;
+    const custom = loadJSON<Snippet[]>(STORAGE_KEYS.snippets, []);
+    const validCustom = Array.isArray(custom)
+      ? custom.filter((snippet) => snippet && typeof snippet.id === 'string' && typeof snippet.code === 'string')
+      : [];
+    return [...DEFAULT_SNIPPETS, ...validCustom];
   });
 
-  // Save code to localStorage on change
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_CODE, code);
-  }, [code]);
+  // Toast
+  const [toast, setToast] = useState<ToastMessage | null>(null);
+  const toastTimer = useRef<number | undefined>(undefined);
+  const showToast = useCallback((message: string, tone: ToastTone = 'success') => {
+    window.clearTimeout(toastTimer.current);
+    setToast({ id: Date.now(), message, tone });
+    toastTimer.current = window.setTimeout(() => setToast(null), 2600);
+  }, []);
 
-  // Save theme
+  // Keep the last dark theme so the light/dark toggle can return to it.
+  const lastDarkThemeRef = useRef<ThemeId>(theme === 'light' ? 'midnight' : theme);
+
+  const currentThemeConfig = THEMES[theme] || THEMES.midnight;
+  const cssVars = useMemo(() => themeCssVars(currentThemeConfig), [currentThemeConfig]);
+
+  // Persist state
+  useEffect(() => saveJSON(STORAGE_KEYS.codeMap, codeMap), [codeMap]);
+  useEffect(() => saveJSON(STORAGE_KEYS.fileNames, fileNames), [fileNames]);
+  useEffect(() => saveString(STORAGE_KEYS.code, codeMap.javascript), [codeMap.javascript]);
+  useEffect(() => saveString(STORAGE_KEYS.language, language), [language]);
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_THEME, theme);
+    saveString(STORAGE_KEYS.theme, theme);
+    if (theme !== 'light') lastDarkThemeRef.current = theme;
   }, [theme]);
+  useEffect(() => saveJSON(STORAGE_KEYS.settings, settings), [settings]);
+  useEffect(() => saveString(STORAGE_KEYS.layout, layoutMode), [layoutMode]);
 
-  // Save settings
+  // Keep the browser chrome in sync with the app theme.
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(settings));
-  }, [settings]);
+    document.documentElement.style.backgroundColor = currentThemeConfig.bg;
+    document.documentElement.style.colorScheme = currentThemeConfig.id === 'light' ? 'light' : 'dark';
+  }, [currentThemeConfig]);
 
-  const currentThemeConfig = THEMES[theme] || THEMES['midnight'];
+  // Clear the share hash after loading it so shared code does not keep
+  // overriding the locally saved snippet on every reload.
+  useEffect(() => {
+    if (INITIAL_SHARE) {
+      const { pathname, search } = window.location;
+      window.history.replaceState(null, '', `${pathname}${search}`);
+      showToast('Shared snippet loaded', 'info');
+    }
+  }, [showToast]);
 
-  // Execute Code
-  const handleRunCode = async () => {
-    if (isRunning) return;
+  useEffect(() => () => window.clearTimeout(toastTimer.current), []);
+
+  const isRunningRef = useRef(false);
+  const runIdRef = useRef(0);
+  const runRef = useRef<() => void>(() => {});
+
+  const handleRunCode = useCallback(async () => {
+    if (isRunningRef.current) return;
+
+    isRunningRef.current = true;
+    const runId = ++runIdRef.current;
 
     setIsRunning(true);
-    setStatus('Running...');
-    setLogs([]); // Clear output on new run
-    setErrorLine(undefined); // Clear previous error highlight
+    setStatus(`Running ${LANGUAGES[language].label}…`);
+    setLogs([]);
+    setErrorLine(undefined);
+    setExecutionTime(undefined);
 
-    // Switch to console tab automatically on mobile view so output is visible
-    if (window.innerWidth < 768) {
-      setMobileTab('console');
-    }
+    // Show output immediately on mobile.
+    if (window.innerWidth < 768) setMobileTab('console');
 
-    const result = await evaluateJavaScript(code, (entry) => {
-      setLogs(prev => [...prev, entry]);
-      if (entry.type === 'error' && entry.line) {
-        setErrorLine(entry.line);
+    const result = await runCode(language, code, (entry) => {
+      // Ignore log callbacks from timers belonging to an older run.
+      if (runIdRef.current !== runId) return;
+
+      if (entry.type === 'clear') {
+        setLogs([]);
+        return;
       }
+
+      setLogs((prev) => [...prev, entry]);
+      if (entry.type === 'error' && entry.line) setErrorLine(entry.line);
     });
 
+    if (runIdRef.current !== runId) return;
+
+    isRunningRef.current = false;
     setIsRunning(false);
     setExecutionTime(result.executionTimeMs);
+    setStatus(
+      result.success
+        ? `Finished in ${result.executionTimeMs} ms`
+        : `Error after ${result.executionTimeMs} ms`
+    );
+  }, [code, language]);
 
-    if (result.success) {
-      setStatus(`Finished in ${result.executionTimeMs}ms`);
-    } else {
-      setStatus(`Execution failed (${result.executionTimeMs}ms)`);
-    }
-  };
+  runRef.current = handleRunCode;
 
-  // Clear Output Console
-  const handleClearOutput = () => {
-    setLogs([]);
-    setExecutionTime(undefined);
-    setStatus('Ready');
-    setErrorLine(undefined);
-  };
+  // Global shortcuts (Ctrl/Cmd + Enter, Ctrl/Cmd + K, Ctrl/Cmd + ,)
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const mod = event.ctrlKey || event.metaKey;
+      if (!mod) return;
 
-  // REPL Single Line Execution
-  const handleEvaluateRepl = async (expr: string) => {
-    setStatus('Evaluating REPL...');
-    await evaluateJavaScript(expr, (entry) => {
-      setLogs(prev => [...prev, entry]);
-    });
-    setStatus('Ready');
-  };
+      const target = event.target as HTMLElement | null;
+      const insideMonaco = target instanceof Element && Boolean(target.closest('.monaco-editor'));
 
-  // Load selected snippet
-  const handleSelectSnippet = (snippet: Snippet) => {
-    setCode(snippet.code);
-    setStatus(`Loaded '${snippet.title}'`);
-    setErrorLine(undefined);
-  };
+      if (event.key === 'Enter' && !event.shiftKey) {
+        if (insideMonaco) return; // Monaco owns this shortcut while focused
+        event.preventDefault();
+        runRef.current();
+        return;
+      }
 
-  // Wraps setCode so any manual edit also clears a stale error highlight
-  const handleCodeChange = (newCode: string) => {
-    setCode(newCode);
-    if (errorLine !== undefined) setErrorLine(undefined);
-  };
-
-  // Save current code as custom snippet
-  const handleSaveCurrentAsSnippet = (title: string, description: string) => {
-    const newSnippet: Snippet = {
-      id: `custom-${Date.now()}`,
-      title,
-      category: 'Saved',
-      description,
-      code,
-      isCustom: true,
-      createdAt: new Date().toISOString()
+      if (event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setIsSnippetsModalOpen((open) => !open);
+        setIsSettingsModalOpen(false);
+      } else if (event.key === ',') {
+        event.preventDefault();
+        setIsSettingsModalOpen((open) => !open);
+        setIsSnippetsModalOpen(false);
+      }
     };
 
-    const updated = [...snippets, newSnippet];
-    setSnippets(updated);
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
-    // Save only custom snippets to localStorage
-    const customOnly = updated.filter(s => s.isCustom);
-    localStorage.setItem(STORAGE_KEY_SNIPPETS, JSON.stringify(customOnly));
-  };
+  const handleClearOutput = useCallback(() => {
+    runIdRef.current += 1; // invalidate pending logs from the previous run
+    isRunningRef.current = false;
+    setIsRunning(false);
+    setLogs([]);
+    setExecutionTime(undefined);
+    setErrorLine(undefined);
+    setStatus('Console cleared');
+  }, []);
 
-  // Delete custom snippet
-  const handleDeleteSnippet = (id: string) => {
-    const updated = snippets.filter(s => s.id !== id);
-    setSnippets(updated);
+  const handleEvaluateRepl = useCallback(async (expr: string) => {
+    await runCode('javascript', expr, (entry) => {
+      if (entry.type === 'clear') {
+        setLogs([]);
+        return;
+      }
+      setLogs((prev) => [...prev, entry]);
+    });
+  }, []);
 
-    const customOnly = updated.filter(s => s.isCustom);
-    localStorage.setItem(STORAGE_KEY_SNIPPETS, JSON.stringify(customOnly));
-  };
+  const handleLanguageChange = useCallback((next: LanguageId) => {
+    if (next === language) return;
 
-  // Download code as script.js
-  const handleDownloadCode = () => {
-    const blob = new Blob([code], { type: 'text/javascript' });
+    // Invalidate any in-flight run so late output cannot land in the new language.
+    runIdRef.current += 1;
+    isRunningRef.current = false;
+    setIsRunning(false);
+    setLogs([]);
+    setExecutionTime(undefined);
+    setErrorLine(undefined);
+
+    setLanguageState(next);
+    setStatus(`Switched to ${LANGUAGES[next].label}`);
+    if (window.innerWidth < 1024) setMobileTab('editor');
+  }, [language]);
+
+  const handleSelectSnippet = useCallback((snippet: Snippet) => {
+    const snippetLanguage = snippet.language ?? 'javascript';
+    runIdRef.current += 1;
+    isRunningRef.current = false;
+    setIsRunning(false);
+    setLogs([]);
+    setExecutionTime(undefined);
+    setLanguageState(snippetLanguage);
+    setCodeMap((prev) => ({ ...prev, [snippetLanguage]: snippet.code }));
+    setStatus(`Loaded “${snippet.title}”`);
+    setErrorLine(undefined);
+    if (window.innerWidth < 1024) setMobileTab('editor');
+    window.setTimeout(() => editorRef.current?.focus(), 60);
+  }, []);
+
+  const handleCodeChange = useCallback(
+    (newCode: string) => {
+      setCodeMap((prev) => ({ ...prev, [language]: newCode }));
+      setErrorLine(undefined);
+    },
+    [language]
+  );
+
+  const handleSaveCurrentAsSnippet = useCallback(
+    (title: string, description: string) => {
+      const newSnippet: Snippet = {
+        id: `custom-${Date.now()}`,
+        title,
+        category: 'Saved',
+        description,
+        code,
+        language,
+        isCustom: true,
+        createdAt: new Date().toISOString(),
+      };
+
+      setSnippets((prev) => {
+        const updated = [...prev, newSnippet];
+        saveJSON(STORAGE_KEYS.snippets, updated.filter((snippet) => snippet.isCustom));
+        return updated;
+      });
+
+      showToast('Snippet saved');
+      setStatus(`Saved “${title}”`);
+    },
+    [code, language, showToast]
+  );
+
+  const handleDeleteSnippet = useCallback(
+    (id: string) => {
+      setSnippets((prev) => {
+        const updated = prev.filter((snippet) => snippet.id !== id);
+        saveJSON(STORAGE_KEYS.snippets, updated.filter((snippet) => snippet.isCustom));
+        return updated;
+      });
+      showToast('Snippet deleted', 'info');
+    },
+    [showToast]
+  );
+
+  const handleFileNameChange = useCallback(
+    (nextName: string) => {
+      const next = sanitizeFileName(nextName, LANGUAGES[language].fileName);
+      if (next === fileNames[language]) return;
+
+      setFileNames((prev) => ({ ...prev, [language]: next }));
+      setStatus(`Renamed to ${next}`);
+    },
+    [fileNames, language]
+  );
+
+  const handleDownloadCode = useCallback(() => {
+    const { id } = LANGUAGES[language];
+    const mime =
+      id === 'javascript' ? 'text/javascript;charset=utf-8' : 'text/plain;charset=utf-8';
+    const blob = new Blob([code], { type: mime });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'script.js';
-    a.click();
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.click();
     URL.revokeObjectURL(url);
-  };
+    showToast(`${fileName} downloaded`);
+  }, [code, fileName, language, showToast]);
 
-  // Copy Shareable URL Link
-  const handleCopyShareLink = () => {
+  const handleCopyShareLink = useCallback(async () => {
     try {
       const encoded = btoa(encodeURIComponent(code));
-      const shareUrl = `${window.location.origin}${window.location.pathname}#code=${encoded}`;
-      navigator.clipboard.writeText(shareUrl);
+      const base = `${window.location.origin}${window.location.pathname}`;
+      const hash = `#code=${encoded}&lang=${language}`;
+      const shareUrl = `${base}${hash}`;
+
+      window.history.replaceState(null, '', hash);
+      const ok = await copyText(shareUrl);
+
+      if (!ok) {
+        showToast('Could not access the clipboard', 'error');
+        return;
+      }
+
       setIsCopiedShare(true);
-      setTimeout(() => setIsCopiedShare(false), 2000);
-    } catch (err) {
-      console.error("Failed to generate share URL:", err);
+      showToast('Share link copied to clipboard');
+      window.setTimeout(() => setIsCopiedShare(false), 2000);
+    } catch (error) {
+      console.error('Failed to generate share URL:', error);
+      showToast('Could not create a share link', 'error');
     }
-  };
+  }, [code, language, showToast]);
+
+  const handleToggleAppearance = useCallback(() => {
+    setTheme((current) => (current === 'light' ? lastDarkThemeRef.current : 'light'));
+  }, []);
+
+  const isStacked = layoutMode === 'stacked';
+  const showsEditorPanel = layoutMode !== 'console-only';
+  const showsConsolePanel = layoutMode !== 'editor-only';
+  const lineCount = code.split('\n').length;
 
   return (
-    <div 
-      className="flex flex-col h-screen w-screen overflow-hidden select-none font-sans transition-colors duration-200"
+    <div
+      className="relative flex h-[100dvh] w-full flex-col overflow-hidden font-sans transition-colors duration-200"
       style={{
         backgroundColor: currentThemeConfig.bg,
-        color: currentThemeConfig.text
+        backgroundImage: `radial-gradient(900px 480px at 12% -12%, ${withAlpha(
+          currentThemeConfig.accent,
+          0.08
+        )}, transparent 65%)`,
+        color: currentThemeConfig.text,
+        colorScheme: currentThemeConfig.id === 'light' ? 'light' : 'dark',
+        ...cssVars,
       }}
     >
-      {/* Top Navigation Bar */}
       <Header
         theme={theme}
-        setTheme={setTheme}
+        onToggleAppearance={handleToggleAppearance}
+        language={language}
+        setLanguage={handleLanguageChange}
+        fileName={fileName}
         layoutMode={layoutMode}
         setLayoutMode={setLayoutMode}
         snippets={snippets}
         onSelectSnippet={handleSelectSnippet}
         onRun={handleRunCode}
-        onClear={handleClearOutput}
         onOpenSnippetsModal={() => setIsSnippetsModalOpen(true)}
         onOpenSettingsModal={() => setIsSettingsModalOpen(true)}
         onDownloadCode={handleDownloadCode}
@@ -244,23 +438,21 @@ export default function App() {
         isRunning={isRunning}
         mobileTab={mobileTab}
         setMobileTab={setMobileTab}
-        logsCount={logs.length}
+        logsCount={logs.filter((log) => log.type !== 'clear').length}
       />
 
-      {/* Main Workspace Area */}
-      <main className="flex-1 flex overflow-hidden relative">
-        {/* Editor Panel */}
-        {(layoutMode === 'split' || layoutMode === 'editor-only' || layoutMode === 'stacked') && (
-          <div 
-            className={`h-full transition-all duration-200 ${
-              mobileTab === 'console' ? 'hidden md:block' : 'block'
-            } ${
-              layoutMode === 'editor-only' 
-                ? 'w-full' 
-                : layoutMode === 'stacked'
-                ? 'w-full h-1/2'
-                : 'w-full md:w-1/2'
-            }`}
+      {/* Workspace */}
+      <main
+        className={`relative flex min-h-0 flex-1 overflow-hidden ${
+          isStacked ? 'flex-col' : 'flex-col md:flex-row'
+        }`}
+      >
+        {/* Editor panel */}
+        {showsEditorPanel && (
+          <div
+            className={`min-h-0 min-w-0 ${isStacked ? 'h-1/2 w-full' : 'h-full'} ${
+              layoutMode === 'editor-only' ? 'w-full' : isStacked ? '' : 'w-full md:w-1/2'
+            } ${showsConsolePanel && mobileTab === 'console' ? 'hidden md:block' : 'block'}`}
           >
             <CodeEditor
               ref={editorRef}
@@ -269,56 +461,60 @@ export default function App() {
               onRun={handleRunCode}
               settings={settings}
               theme={currentThemeConfig}
-              cursorLine={cursorLine}
+              language={language}
+              fileName={fileName}
+              onFileNameChange={handleFileNameChange}
               setCursorLine={setCursorLine}
               errorLine={errorLine}
             />
           </div>
         )}
 
-        {/* Console Output Panel */}
-        {(layoutMode === 'split' || layoutMode === 'console-only' || layoutMode === 'stacked') && (
-          <div 
-            className={`h-full flex flex-col transition-all duration-200 ${
-              mobileTab === 'editor' ? 'hidden md:flex' : 'flex'
-            } ${
-              layoutMode === 'console-only' 
-                ? 'w-full' 
-                : layoutMode === 'stacked'
-                ? 'w-full h-1/2 border-t'
-                : 'w-full md:w-1/2 border-l'
-            }`}
+        {/* Console panel */}
+        {showsConsolePanel && (
+          <div
+            className={`flex min-h-0 min-w-0 flex-col ${
+              isStacked
+                ? 'h-1/2 w-full border-t'
+                : layoutMode === 'console-only'
+                  ? 'h-full w-full'
+                  : 'h-full w-full border-t md:w-1/2 md:border-l md:border-t-0'
+            } ${showsEditorPanel && mobileTab === 'editor' ? 'hidden md:flex' : 'flex'}`}
             style={{ borderColor: currentThemeConfig.border }}
           >
-            <div className="flex-1 overflow-hidden">
+            <div className="min-h-0 flex-1 overflow-hidden">
               <ConsoleOutput
                 logs={logs}
                 onClear={handleClearOutput}
                 theme={currentThemeConfig}
                 executionTime={executionTime}
                 fontSize={settings.fontSize}
+                language={language}
               />
             </div>
 
-            {/* Bottom Interactive REPL Prompt */}
-            <InteractiveRepl
-              onEvaluate={handleEvaluateRepl}
-              theme={currentThemeConfig}
-              fontSize={settings.fontSize}
-            />
+            {language === 'javascript' && (
+              <InteractiveRepl
+                onEvaluate={handleEvaluateRepl}
+                theme={currentThemeConfig}
+                fontSize={settings.fontSize}
+              />
+            )}
           </div>
         )}
       </main>
 
-      {/* Footer Status Bar */}
       <Footer
         status={status}
         cursorLine={cursorLine}
         theme={currentThemeConfig}
         isRunning={isRunning}
+        charCount={code.length}
+        lineCount={lineCount}
+        language={language}
+        fileName={fileName}
       />
 
-      {/* Modals */}
       <SnippetsModal
         isOpen={isSnippetsModalOpen}
         onClose={() => setIsSnippetsModalOpen(false)}
@@ -327,6 +523,7 @@ export default function App() {
         onSaveCurrentAsSnippet={handleSaveCurrentAsSnippet}
         onDeleteSnippet={handleDeleteSnippet}
         currentCode={code}
+        currentLanguage={language}
         theme={currentThemeConfig}
       />
 
@@ -336,7 +533,11 @@ export default function App() {
         settings={settings}
         setSettings={setSettings}
         theme={currentThemeConfig}
+        themeId={theme}
+        setTheme={setTheme}
       />
+
+      <Toast toast={toast} />
 
       <Analytics />
       <SpeedInsights />

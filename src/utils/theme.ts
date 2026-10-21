@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import { ThemeConfig, ThemeId } from '../types';
 
 export const THEMES: Record<ThemeId, ThemeConfig> = {
@@ -76,13 +77,43 @@ export const THEMES: Record<ThemeId, ThemeConfig> = {
     lineNumText: '#6272a4',
     activeLineBg: '#44475a66'
   },
+  nord: {
+    id: 'nord',
+    name: 'Nord Frost',
+    bg: '#0f1621',
+    panelBg: '#16202e',
+    editorBg: '#111a26',
+    consoleBg: '#0b121b',
+    text: '#e5e9f0',
+    textMuted: '#7b8ba3',
+    accent: '#88c0d0',
+    border: '#22303f',
+    lineNumBg: '#111a26',
+    lineNumText: '#4c5b6e',
+    activeLineBg: '#1c2a3a80'
+  },
+  sunset: {
+    id: 'sunset',
+    name: 'Sunset Ember',
+    bg: '#140f17',
+    panelBg: '#1d1622',
+    editorBg: '#171119',
+    consoleBg: '#100b12',
+    text: '#f5e6e8',
+    textMuted: '#a28a96',
+    accent: '#fb7185',
+    border: '#33232e',
+    lineNumBg: '#171119',
+    lineNumText: '#6d5562',
+    activeLineBg: '#2a1d27aa'
+  },
   light: {
     id: 'light',
     name: 'Daylight Paper',
-    bg: '#f8fafc',
+    bg: '#f6f8fb',
     panelBg: '#ffffff',
     editorBg: '#ffffff',
-    consoleBg: '#f1f5f9',
+    consoleBg: '#f8fafc',
     text: '#0f172a',
     textMuted: '#64748b',
     accent: '#0284c7',
@@ -92,3 +123,68 @@ export const THEMES: Record<ThemeId, ThemeConfig> = {
     activeLineBg: '#e2e8f088'
   }
 };
+
+export const isLightTheme = (id: ThemeId): boolean => id === 'light';
+
+/** Text color that stays readable on top of the theme accent color. */
+export const accentContrast = (id: ThemeId): string =>
+  isLightTheme(id) ? '#ffffff' : '#07121f';
+
+/** Convert a #rgb / #rrggbb color to an rgba() string. */
+export function withAlpha(hex: string, alpha: number): string {
+  const { r, g, b } = parseHex(hex);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+/**
+ * Monaco's theme colors only accept hex values, so alpha has to be encoded as
+ * the 8th/4th hex digit rather than rgba().
+ */
+export function withHexAlpha(hex: string, alpha: number): string {
+  const cleaned = hex.replace('#', '').trim();
+  const full = cleaned.length === 3
+    ? cleaned.split('').map((c) => c + c).join('')
+    : cleaned.slice(0, 6);
+  const a = Math.round(Math.min(1, Math.max(0, alpha)) * 255)
+    .toString(16)
+    .padStart(2, '0');
+  return `#${full}${a}`;
+}
+
+function parseHex(hex: string): { r: number; g: number; b: number } {
+  const cleaned = hex.replace('#', '').trim();
+  const full = cleaned.length === 3
+    ? cleaned.split('').map((c) => c + c).join('')
+    : cleaned;
+  const value = parseInt(full, 16);
+  if (Number.isNaN(value)) return { r: 255, g: 255, b: 255 };
+  return {
+    r: (value >> 16) & 255,
+    g: (value >> 8) & 255,
+    b: value & 255,
+  };
+}
+
+/**
+ * CSS custom properties exposed on the app shell so every component can use
+ * the same palette without hard-coded Tailwind grays (which broke light mode).
+ */
+export function themeCssVars(theme: ThemeConfig): CSSProperties {
+  const light = isLightTheme(theme.id);
+  return {
+    '--app-bg': theme.bg,
+    '--panel-bg': theme.panelBg,
+    '--editor-bg': theme.editorBg,
+    '--console-bg': theme.consoleBg,
+    '--text': theme.text,
+    '--text-muted': theme.textMuted,
+    '--accent': theme.accent,
+    '--accent-contrast': accentContrast(theme.id),
+    '--accent-soft': withAlpha(theme.accent, light ? 0.1 : 0.14),
+    '--accent-line': withAlpha(theme.accent, light ? 0.35 : 0.45),
+    '--border': theme.border,
+    '--hover': light ? 'rgba(15, 23, 42, 0.05)' : 'rgba(255, 255, 255, 0.06)',
+    '--scroll-thumb': light ? 'rgba(100, 116, 139, 0.35)' : 'rgba(148, 163, 184, 0.28)',
+    '--scroll-thumb-hover': light ? 'rgba(71, 85, 105, 0.55)' : 'rgba(148, 163, 184, 0.5)',
+  } as CSSProperties;
+}

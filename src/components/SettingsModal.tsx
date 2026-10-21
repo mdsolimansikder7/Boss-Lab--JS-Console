@@ -1,6 +1,19 @@
-import React from 'react';
-import { X, Settings as SettingsIcon, Type, Indent, ToggleLeft, ToggleRight } from 'lucide-react';
-import { EditorSettings, ThemeConfig } from '../types';
+import React, { useEffect } from 'react';
+import {
+  X,
+  SlidersHorizontal,
+  Type,
+  Indent,
+  Palette,
+  Check,
+  RotateCcw,
+  Minus,
+  Plus,
+  Highlighter,
+} from 'lucide-react';
+import { EditorSettings, ThemeConfig, ThemeId } from '../types';
+import { DEFAULT_EDITOR_SETTINGS } from '../utils/settings';
+import { THEMES } from '../utils/theme';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -8,172 +21,257 @@ interface SettingsModalProps {
   settings: EditorSettings;
   setSettings: React.Dispatch<React.SetStateAction<EditorSettings>>;
   theme: ThemeConfig;
+  themeId: ThemeId;
+  setTheme: (theme: ThemeId) => void;
 }
+
+const SectionTitle: React.FC<{ icon: React.ComponentType<{ className?: string }>; children: React.ReactNode }> = ({
+  icon: Icon,
+  children,
+}) => (
+  <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em]">
+    <Icon className="h-3.5 w-3.5" style={{ color: 'var(--accent)' }} />
+    <span style={{ color: 'var(--text-muted)' }}>{children}</span>
+  </div>
+);
+
+const Toggle: React.FC<{
+  checked: boolean;
+  onChange: () => void;
+  label: string;
+}> = ({ checked, onChange, label }) => (
+  <button
+    type="button"
+    role="switch"
+    aria-checked={checked}
+    aria-label={label}
+    onClick={onChange}
+    className="relative h-5 w-9 shrink-0 rounded-full transition-colors"
+    style={{ backgroundColor: checked ? 'var(--accent)' : 'var(--border)' }}
+  >
+    <span
+      className="absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform"
+      style={{ transform: checked ? 'translateX(1.125rem)' : 'translateX(0.125rem)' }}
+    />
+  </button>
+);
+
+const SettingRow: React.FC<{
+  title: string;
+  description: string;
+  children: React.ReactNode;
+}> = ({ title, description, children }) => (
+  <div
+    className="flex items-center justify-between gap-4 border-t py-2.5 first:border-t-0 first:pt-0"
+    style={{ borderColor: 'var(--border)' }}
+  >
+    <div className="min-w-0">
+      <p className="text-xs font-semibold" style={{ color: 'var(--text)' }}>
+        {title}
+      </p>
+      <p className="mt-0.5 text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+        {description}
+      </p>
+    </div>
+    {children}
+  </div>
+);
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
   settings,
   setSettings,
-  theme
+  theme,
+  themeId,
+  setTheme,
 }) => {
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const updateSetting = <K extends keyof EditorSettings>(key: K, value: EditorSettings[K]) => {
-    setSettings(prev => ({ ...prev, [key]: value }));
+    setSettings((prev) => ({ ...prev, [key]: value }));
   };
 
-  const isLight = theme.id === 'light';
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/70 backdrop-blur-sm animate-fadeIn">
-      <div 
-        className="w-full max-w-md rounded-xl border shadow-2xl overflow-hidden"
-        style={{
-          backgroundColor: theme.panelBg,
-          borderColor: theme.border,
-          color: theme.text
-        }}
+    <div
+      className="animate-fadeIn fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3 backdrop-blur-sm sm:p-4"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
+        className="flex max-h-[88vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border shadow-2xl"
+        style={{ backgroundColor: theme.panelBg, borderColor: theme.border, color: theme.text }}
       >
-        {/* Modal Header */}
-        <div 
-          className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-4 border-b"
+        {/* Header */}
+        <div
+          className="flex shrink-0 items-center justify-between border-b px-4 py-3 sm:px-5"
           style={{ borderColor: theme.border }}
         >
           <div className="flex items-center gap-2">
-            <SettingsIcon className={`w-5 h-5 ${isLight ? 'text-sky-600' : 'text-sky-400'}`} />
-            <h2 className="text-sm sm:text-base font-bold tracking-tight">Editor Preferences</h2>
+            <SlidersHorizontal className="h-4 w-4" style={{ color: theme.accent }} />
+            <h2 id="settings-title" className="text-sm font-bold tracking-tight">
+              Settings
+            </h2>
           </div>
-
           <button
+            type="button"
             onClick={onClose}
-            className={`p-1.5 rounded-lg transition-colors ${
-              isLight ? 'hover:bg-slate-200 text-slate-600 hover:text-slate-900' : 'hover:bg-white/10 text-gray-400 hover:text-white'
-            }`}
+            className="ui-btn ui-btn--ghost ui-btn--icon h-7 w-7"
+            aria-label="Close settings"
           >
-            <X className="w-5 h-5" />
+            <X className="h-4 w-4" />
           </button>
         </div>
 
-        {/* Modal Body */}
-        <div className="p-4 sm:p-5 space-y-4 text-xs">
-          {/* Font Size */}
-          <div className="flex items-center justify-between gap-4 py-1">
-            <div className="flex items-center gap-2">
-              <Type className={`w-4 h-4 ${isLight ? 'text-sky-600' : 'text-sky-400'}`} />
-              <div>
-                <p className={`font-semibold ${isLight ? 'text-slate-800' : 'text-gray-200'}`}>Editor Font Size</p>
-                <p className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-gray-400'}`}>Set monospace text size in pixels</p>
-              </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+          {/* Appearance */}
+          <section className="mb-5">
+            <SectionTitle icon={Palette}>Appearance</SectionTitle>
+            <div className="grid grid-cols-2 gap-1.5">
+              {Object.values(THEMES).map((option) => {
+                const active = option.id === themeId;
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    onClick={() => setTheme(option.id)}
+                    aria-pressed={active}
+                    className="flex items-center gap-2 rounded-lg border px-2 py-2 text-left transition-all"
+                    style={{
+                      borderColor: active ? option.accent : theme.border,
+                      backgroundColor: active ? `${option.accent}14` : theme.bg,
+                      boxShadow: active ? `0 0 0 1px ${option.accent}55` : 'none',
+                    }}
+                  >
+                    <span className="flex shrink-0 items-center -space-x-1">
+                      <span
+                        className="h-4 w-4 rounded-full border"
+                        style={{ backgroundColor: option.bg, borderColor: option.border }}
+                      />
+                      <span
+                        className="h-4 w-4 rounded-full border"
+                        style={{ backgroundColor: option.accent, borderColor: option.border }}
+                      />
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-[11px] font-medium" style={{ color: theme.text }}>
+                      {option.name}
+                    </span>
+                    {active && <Check className="h-3.5 w-3.5 shrink-0" style={{ color: option.accent }} />}
+                  </button>
+                );
+              })}
             </div>
+          </section>
 
-            <div className="flex items-center gap-2 font-mono">
-              <input
-                type="range"
-                min="12"
-                max="22"
-                value={settings.fontSize}
-                onChange={(e) => updateSetting('fontSize', Number(e.target.value))}
-                className="w-20 sm:w-24 accent-sky-500"
-              />
-              <span className={`w-8 text-right font-bold ${isLight ? 'text-sky-700' : 'text-sky-400'}`}>{settings.fontSize}px</span>
-            </div>
-          </div>
+          {/* Editor */}
+          <section>
+            <SectionTitle icon={Type}>Editor</SectionTitle>
 
-          {/* Tab Size */}
-          <div className={`flex items-center justify-between gap-4 py-1 border-t ${isLight ? 'border-slate-200' : 'border-white/5'}`}>
-            <div className="flex items-center gap-2">
-              <Indent className={`w-4 h-4 ${isLight ? 'text-emerald-600' : 'text-emerald-400'}`} />
-              <div>
-                <p className={`font-semibold ${isLight ? 'text-slate-800' : 'text-gray-200'}`}>Tab Size</p>
-                <p className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-gray-400'}`}>Number of spaces per indent tab</p>
-              </div>
-            </div>
-
-            <div className="flex gap-1">
-              {[2, 4].map((size) => (
+            <SettingRow title="Font size" description="Monospace text size in the code editor">
+              <div className="flex items-center gap-1.5">
                 <button
-                  key={size}
-                  onClick={() => updateSetting('tabSize', size)}
-                  className={`px-2.5 py-1 rounded-md font-mono font-bold transition-all ${
-                    settings.tabSize === size
-                      ? 'bg-emerald-500 text-black'
-                      : (isLight ? 'bg-slate-200 text-slate-700 hover:bg-slate-300' : 'bg-white/5 text-gray-400 hover:bg-white/10')
-                  }`}
+                  type="button"
+                  onClick={() => updateSetting('fontSize', Math.max(11, settings.fontSize - 1))}
+                  className="ui-btn ui-btn--icon h-6 w-6"
+                  aria-label="Decrease font size"
                 >
-                  {size} spaces
+                  <Minus className="h-3 w-3" />
                 </button>
-              ))}
-            </div>
-          </div>
+                <span className="w-9 text-center font-mono text-xs font-bold" style={{ color: theme.accent }}>
+                  {settings.fontSize}px
+                </span>
+                <button
+                  type="button"
+                  onClick={() => updateSetting('fontSize', Math.min(24, settings.fontSize + 1))}
+                  className="ui-btn ui-btn--icon h-6 w-6"
+                  aria-label="Increase font size"
+                >
+                  <Plus className="h-3 w-3" />
+                </button>
+              </div>
+            </SettingRow>
 
-          {/* Auto Close Brackets */}
-          <div className={`flex items-center justify-between gap-4 py-1 border-t ${isLight ? 'border-slate-200' : 'border-white/5'}`}>
-            <div>
-              <p className={`font-semibold ${isLight ? 'text-slate-800' : 'text-gray-200'}`}>Auto-Close Brackets & Quotes</p>
-              <p className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-gray-400'}`}>Automatically append closing (), {}, [], "", ''</p>
-            </div>
+            <SettingRow title="Tab size" description="Spaces inserted for every indentation level">
+              <div className="ui-segment">
+                {[2, 4].map((size) => (
+                  <button
+                    key={size}
+                    type="button"
+                    onClick={() => updateSetting('tabSize', size)}
+                    data-active={settings.tabSize === size}
+                  >
+                    {size}
+                  </button>
+                ))}
+              </div>
+            </SettingRow>
 
-            <button
-              onClick={() => updateSetting('autoCloseBrackets', !settings.autoCloseBrackets)}
-              className="text-sky-500 hover:opacity-80 transition-opacity"
-            >
-              {settings.autoCloseBrackets ? (
-                <ToggleRight className="w-7 h-7 text-sky-500" />
-              ) : (
-                <ToggleLeft className={`w-7 h-7 ${isLight ? 'text-slate-400' : 'text-gray-500'}`} />
-              )}
-            </button>
-          </div>
+            <SettingRow title="Auto-close brackets" description="Automatically insert closing brackets and quotes">
+              <Toggle
+                checked={settings.autoCloseBrackets}
+                onChange={() => updateSetting('autoCloseBrackets', !settings.autoCloseBrackets)}
+                label="Toggle auto-close brackets"
+              />
+            </SettingRow>
 
-          {/* Word Wrap */}
-          <div className={`flex items-center justify-between gap-4 py-1 border-t ${isLight ? 'border-slate-200' : 'border-white/5'}`}>
-            <div>
-              <p className={`font-semibold ${isLight ? 'text-slate-800' : 'text-gray-200'}`}>Word Wrap</p>
-              <p className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-gray-400'}`}>Wrap long lines of code automatically</p>
-            </div>
+            <SettingRow title="Word wrap" description="Wrap long lines instead of scrolling horizontally">
+              <Toggle
+                checked={settings.wordWrap}
+                onChange={() => updateSetting('wordWrap', !settings.wordWrap)}
+                label="Toggle word wrap"
+              />
+            </SettingRow>
 
-            <button
-              onClick={() => updateSetting('wordWrap', !settings.wordWrap)}
-              className="text-sky-500 hover:opacity-80 transition-opacity"
-            >
-              {settings.wordWrap ? (
-                <ToggleRight className="w-7 h-7 text-sky-500" />
-              ) : (
-                <ToggleLeft className={`w-7 h-7 ${isLight ? 'text-slate-400' : 'text-gray-500'}`} />
-              )}
-            </button>
-          </div>
+            <SettingRow title="Line numbers" description="Show the line number gutter">
+              <Toggle
+                checked={settings.lineNumbers}
+                onChange={() => updateSetting('lineNumbers', !settings.lineNumbers)}
+                label="Toggle line numbers"
+              />
+            </SettingRow>
 
-          {/* Line Numbers */}
-          <div className={`flex items-center justify-between gap-4 py-1 border-t ${isLight ? 'border-slate-200' : 'border-white/5'}`}>
-            <div>
-              <p className={`font-semibold ${isLight ? 'text-slate-800' : 'text-gray-200'}`}>Show Line Numbers</p>
-              <p className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-gray-400'}`}>Display line number gutter on the left side</p>
-            </div>
+            <SettingRow title="Highlight active line" description="Tint the line the cursor is currently on">
+              <Toggle
+                checked={settings.showLineHighlight}
+                onChange={() => updateSetting('showLineHighlight', !settings.showLineHighlight)}
+                label="Toggle active line highlight"
+              />
+            </SettingRow>
+          </section>
 
-            <button
-              onClick={() => updateSetting('lineNumbers', !settings.lineNumbers)}
-              className="text-sky-500 hover:opacity-80 transition-opacity"
-            >
-              {settings.lineNumbers ? (
-                <ToggleRight className="w-7 h-7 text-sky-500" />
-              ) : (
-                <ToggleLeft className={`w-7 h-7 ${isLight ? 'text-slate-400' : 'text-gray-500'}`} />
-              )}
-            </button>
-          </div>
+          <p className="mt-4 flex items-center gap-1.5 text-[11px]" style={{ color: theme.textMuted }}>
+            <Highlighter className="h-3 w-3" />
+            Preferences are saved automatically in this browser.
+          </p>
         </div>
 
-        {/* Modal Footer */}
-        <div 
-          className="flex justify-end px-5 py-3 border-t"
+        {/* Footer */}
+        <div
+          className="flex shrink-0 items-center justify-between gap-2 border-t px-4 py-3 sm:px-5"
           style={{ backgroundColor: theme.bg, borderColor: theme.border }}
         >
           <button
-            onClick={onClose}
-            className="px-4 py-1.5 rounded-lg bg-sky-500 text-white font-semibold text-xs hover:bg-sky-600 transition-colors"
+            type="button"
+            onClick={() => setSettings(DEFAULT_EDITOR_SETTINGS)}
+            className="ui-btn ui-btn--ghost h-8 gap-1.5 px-2 text-[11px]"
           >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Reset defaults
+          </button>
+          <button type="button" onClick={onClose} className="ui-btn ui-btn--primary h-8 px-4">
             Done
           </button>
         </div>

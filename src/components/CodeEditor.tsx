@@ -1,8 +1,11 @@
-import React, { useRef, useState, useEffect, useImperativeHandle, forwardRef } from 'react';
-import Editor, { OnMount } from '@monaco-editor/react';
+import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import Editor, { BeforeMount, OnMount } from '@monaco-editor/react';
 import type * as MonacoTypes from 'monaco-editor';
-import { FileCode, Search, Wand2, Copy, Check } from 'lucide-react';
-import { EditorSettings, ThemeConfig } from '../types';
+import { FileCode, Search, Wand2, Copy, Check, UploadCloud, Pencil } from 'lucide-react';
+import { EditorSettings, LanguageId, ThemeConfig } from '../types';
+import { isLightTheme, withHexAlpha } from '../utils/theme';
+import { copyText } from '../utils/clipboard';
+import { LANGUAGES } from '../utils/languages';
 
 interface CodeEditorProps {
   code: string;
@@ -10,7 +13,9 @@ interface CodeEditorProps {
   onRun: () => void;
   settings: EditorSettings;
   theme: ThemeConfig;
-  cursorLine: number;
+  language: LanguageId;
+  fileName: string;
+  onFileNameChange: (name: string) => void;
   setCursorLine: (line: number) => void;
   errorLine?: number;
 }
@@ -20,75 +25,145 @@ export interface CodeEditorRef {
   formatCode: () => void;
 }
 
-export const CodeEditor = forwardRef<CodeEditorRef, CodeEditorProps>(({
-  code,
-  setCode,
-  onRun,
-  settings,
-  theme,
-  cursorLine,
-  setCursorLine,
-  errorLine
-}, ref) => {
-  // Holds the live Monaco editor instance (replaces the old textareaRef)
-  const editorInstanceRef = useRef<MonacoTypes.editor.IStandaloneCodeEditor | null>(null);
-  const monacoInstanceRef = useRef<typeof MonacoTypes | null>(null);
-  const decorationsRef = useRef<string[]>([]);
-  const [copied, setCopied] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [showSearch, setShowSearch] = useState(false);
+const editorThemeName = (theme: ThemeConfig) => `bosslab-${theme.id}`;
 
-  const lines = code.split('\n');
-  const lineCount = lines.length;
+const monacoColor = (color: string) => color.replace('#', '').slice(0, 6);
 
-  useImperativeHandle(ref, () => ({
-    focus: () => {
-      editorInstanceRef.current?.focus();
+function defineEditorTheme(monaco: typeof MonacoTypes, theme: ThemeConfig) {
+  const light = isLightTheme(theme.id);
+
+  monaco.editor.defineTheme(editorThemeName(theme), {
+    base: light ? 'vs' : 'vs-dark',
+    inherit: true,
+    rules: [
+      { token: 'comment', foreground: monacoColor(theme.textMuted), fontStyle: 'italic' },
+      { token: 'keyword', foreground: monacoColor(theme.accent) },
+      { token: 'string', foreground: light ? '0f766e' : 'a5e8c8' },
+      { token: 'number', foreground: light ? 'b45309' : 'fbbf24' },
+      { token: 'type', foreground: light ? '7c3aed' : 'c4b5fd' },
+    ],
+    colors: {
+      'editor.background': theme.editorBg,
+      'editor.foreground': theme.text,
+      'editorLineNumber.foreground': theme.lineNumText,
+      'editorLineNumber.activeForeground': theme.accent,
+      'editor.lineHighlightBackground': theme.activeLineBg,
+      'editor.lineHighlightBorder': '#00000000',
+      'editor.selectionBackground': withHexAlpha(theme.accent, 0.24),
+      'editor.inactiveSelectionBackground': withHexAlpha(theme.accent, 0.14),
+      'editor.selectionHighlightBackground': withHexAlpha(theme.accent, 0.16),
+      'editorCursor.foreground': theme.accent,
+      'editor.findMatchBackground': withHexAlpha(theme.accent, 0.35),
+      'editor.findMatchHighlightBackground': withHexAlpha(theme.accent, 0.18),
+      'editorIndentGuide.background1': withHexAlpha(theme.text, 0.07),
+      'editorIndentGuide.activeBackground1': withHexAlpha(theme.accent, 0.3),
+      'editorBracketMatch.background': withHexAlpha(theme.accent, 0.16),
+      'editorBracketMatch.border': withHexAlpha(theme.accent, 0.5),
+      'editorGutter.background': theme.editorBg,
+      'editorWidget.background': theme.panelBg,
+      'editorWidget.border': theme.border,
+      'editorSuggestWidget.background': theme.panelBg,
+      'editorSuggestWidget.border': theme.border,
+      'editorSuggestWidget.selectedBackground': withHexAlpha(theme.accent, 0.18),
+      'editorHoverWidget.background': theme.panelBg,
+      'editorHoverWidget.border': theme.border,
+      'input.background': theme.bg,
+      'input.border': theme.border,
+      'dropdown.background': theme.panelBg,
+      'dropdown.border': theme.border,
+      'scrollbarSlider.background': withHexAlpha(theme.text, 0.12),
+      'scrollbarSlider.hoverBackground': withHexAlpha(theme.text, 0.2),
+      'scrollbarSlider.activeBackground': withHexAlpha(theme.text, 0.28),
     },
-    formatCode: () => {
-      formatJSCode();
-    }
-  }));
+  });
+}
 
-  // Basic JS Code Formatter — unchanged from before, still works on the code string
-  const formatJSCode = () => {
-    let indentLevel = 0;
-    const tab = ' '.repeat(settings.tabSize);
-    const codeLines = code.split('\n');
+export const CodeEditor = forwardRef<CodeEditorRef, CodeEditorProps>(
+  ({ code, setCode, onRun, settings, theme, language, fileName, onFileNameChange, setCursorLine, errorLine }, ref) => {
+    const editorInstanceRef = useRef<MonacoTypes.editor.IStandaloneCodeEditor | null>(null);
+    const monacoInstanceRef = useRef<typeof MonacoTypes | null>(null);
+    const decorationsRef = useRef<string[]>([]);
+    const dragDepth = useRef(0);
+    const nameInputRef = useRef<HTMLInputElement>(null);
+    const cancelRenameRef = useRef(false);
 
-    const formattedLines = codeLines.map(line => {
-      let trimmed = line.trim();
-      if (!trimmed) return '';
+    const [copied, setCopied] = useState(false);
+    const [isDragging, setIsDragging] = useState(false);
+    const [editingName, setEditingName] = useState(false);
+    const [draftName, setDraftName] = useState(fileName);
 
-      if (trimmed.startsWith('}') || trimmed.startsWith(']') || trimmed.startsWith(')')) {
-        indentLevel = Math.max(0, indentLevel - 1);
+    const lineCount = code.split('\n').length;
+    const light = isLightTheme(theme.id);
+    const languageConfig = LANGUAGES[language];
+
+    // Fallback formatter used only when Monaco's JS formatter is unavailable.
+    // Quotes and comments are stripped before counting brackets so `"}"` does
+    // not corrupt the indentation (the old formatter did exactly that).
+    const formatFallback = () => {
+      const tab = ' '.repeat(settings.tabSize);
+      let indentLevel = 0;
+
+      const formatted = code.split('\n').map((line) => {
+        const trimmed = line.trim();
+        if (!trimmed) return '';
+
+        const withoutStrings = trimmed
+          .replace(/(['"`])(?:\\.|(?!\1).)*\1/g, '""')
+          .replace(/\/\/.*$/, '');
+
+        if (/^[}\])]/.test(withoutStrings)) {
+          indentLevel = Math.max(0, indentLevel - 1);
+        }
+
+        const result = tab.repeat(indentLevel) + trimmed;
+
+        const openBrackets = (withoutStrings.match(/[{[\(]/g) || []).length;
+        const closeBrackets = (withoutStrings.match(/[}\])]/g) || []).length;
+        indentLevel = Math.max(0, indentLevel + openBrackets - closeBrackets);
+
+        return result;
+      });
+
+      setCode(formatted.join('\n'));
+    };
+
+    const formatJSCode = async () => {
+      const editor = editorInstanceRef.current;
+      const action = editor?.getAction('editor.action.formatDocument');
+      if (action) {
+        try {
+          await action.run();
+          return;
+        } catch {
+          /* no formatter registered — fall through */
+        }
       }
+      formatFallback();
+    };
 
-      const indent = tab.repeat(indentLevel);
-      const result = indent + trimmed;
+    useImperativeHandle(ref, () => ({
+      focus: () => editorInstanceRef.current?.focus(),
+      formatCode: () => {
+        void formatJSCode();
+      },
+    }));
 
-      const openBrackets = (trimmed.match(/[\{\[\(]/g) || []).length;
-      const closeBrackets = (trimmed.match(/[\}\]\)]/g) || []).length;
-      indentLevel += (openBrackets - closeBrackets);
-      if (indentLevel < 0) indentLevel = 0;
+    const handleCopy = async () => {
+      const ok = await copyText(code);
+      if (!ok) return;
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    };
 
-      return result;
-    });
+    const openFind = () => {
+      const editor = editorInstanceRef.current;
+      if (!editor) return;
+      editor.focus();
+      const action = editor.getAction('actions.find');
+      void action?.run();
+    };
 
-    setCode(formattedLines.join('\n'));
-  };
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-
-  // Drag & drop file loader — unchanged
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const file = e.dataTransfer.files[0];
+    const readFile = (file: File) => {
       const reader = new FileReader();
       reader.onload = (event) => {
         if (typeof event.target?.result === 'string') {
@@ -96,181 +171,317 @@ export const CodeEditor = forwardRef<CodeEditorRef, CodeEditorProps>(({
         }
       };
       reader.readAsText(file);
-    }
-  };
+    };
 
-  const isLight = theme.id === 'light';
+    const handleDragEnter = (event: React.DragEvent) => {
+      event.preventDefault();
+      if (!event.dataTransfer?.types?.includes('Files')) return;
+      dragDepth.current += 1;
+      setIsDragging(true);
+    };
 
-  // Runs once when Monaco finishes mounting.
-  // This is where we wire up Ctrl+Enter to run, and cursor-line tracking —
-  // both of which the old textarea did manually, Monaco gives us hooks for instead.
-  const handleEditorMount: OnMount = (editorInstance, monaco) => {
-    editorInstanceRef.current = editorInstance;
-    monacoInstanceRef.current = monaco;
+    const handleDragLeave = (event: React.DragEvent) => {
+      event.preventDefault();
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      if (dragDepth.current === 0) setIsDragging(false);
+    };
 
-    editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
-      onRun();
-    });
+    const handleDrop = (event: React.DragEvent) => {
+      event.preventDefault();
+      dragDepth.current = 0;
+      setIsDragging(false);
+      const file = event.dataTransfer.files?.[0];
+      if (file) readFile(file);
+    };
 
-    editorInstance.onDidChangeCursorPosition((e) => {
-      setCursorLine(e.position.lineNumber);
-    });
-  };
+    const beforeMount: BeforeMount = (monaco) => {
+      monacoInstanceRef.current = monaco;
+      defineEditorTheme(monaco, theme);
+    };
 
-  // Highlights the exact line where a runtime error occurred (red gutter dot + line tint)
-  useEffect(() => {
-    const editor = editorInstanceRef.current;
-    const monacoNs = monacoInstanceRef.current;
-    if (!editor || !monacoNs) return;
+    const handleEditorMount: OnMount = (editorInstance, monaco) => {
+      editorInstanceRef.current = editorInstance;
+      monacoInstanceRef.current = monaco;
 
-    const model = editor.getModel();
-    if (!model) return;
+      editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
+        onRun();
+      });
 
-    if (errorLine && errorLine >= 1 && errorLine <= model.getLineCount()) {
-      const lineLength = model.getLineMaxColumn(errorLine);
+      editorInstance.onDidChangeCursorPosition((event) => {
+        setCursorLine(event.position.lineNumber);
+      });
+    };
 
-      monacoNs.editor.setModelMarkers(model, 'js-console-runtime', [
-        {
-          startLineNumber: errorLine,
-          startColumn: 1,
-          endLineNumber: errorLine,
-          endColumn: lineLength,
-          message: 'Execution error occurred on this line',
-          severity: monacoNs.MarkerSeverity.Error,
-        },
-      ]);
+    // Keep Monaco's colors in sync with the selected app theme.
+    useEffect(() => {
+      const monaco = monacoInstanceRef.current;
+      if (!monaco) return;
 
-      decorationsRef.current = editor.deltaDecorations(decorationsRef.current, [
-        {
-          range: new monacoNs.Range(errorLine, 1, errorLine, 1),
-          options: {
-            isWholeLine: true,
-            className: 'error-line-highlight',
-            glyphMarginClassName: 'error-line-glyph',
+      defineEditorTheme(monaco, theme);
+      monaco.editor.setTheme(editorThemeName(theme));
+    }, [theme]);
+
+    // Highlight the exact line where a runtime error occurred.
+    useEffect(() => {
+      const editor = editorInstanceRef.current;
+      const monaco = monacoInstanceRef.current;
+      if (!editor || !monaco) return;
+
+      const model = editor.getModel();
+      if (!model) return;
+
+      if (errorLine && errorLine >= 1 && errorLine <= model.getLineCount()) {
+        const lineLength = model.getLineMaxColumn(errorLine);
+
+        monaco.editor.setModelMarkers(model, 'js-console-runtime', [
+          {
+            startLineNumber: errorLine,
+            startColumn: 1,
+            endLineNumber: errorLine,
+            endColumn: lineLength,
+            message: 'Execution error occurred on this line',
+            severity: monaco.MarkerSeverity.Error,
           },
-        },
-      ]);
+        ]);
 
-      editor.revealLineInCenter(errorLine);
-    } else {
-      monacoNs.editor.setModelMarkers(model, 'js-console-runtime', []);
-      decorationsRef.current = editor.deltaDecorations(decorationsRef.current, []);
-    }
-  }, [errorLine]);
+        decorationsRef.current = editor.deltaDecorations(decorationsRef.current, [
+          {
+            range: new monaco.Range(errorLine, 1, errorLine, 1),
+            options: {
+              isWholeLine: true,
+              className: 'error-line-highlight',
+              glyphMarginClassName: 'error-line-glyph',
+            },
+          },
+        ]);
 
-  return (
-    <div 
-      className="flex flex-col h-full w-full overflow-hidden border-r transition-colors duration-200"
-      style={{
-        backgroundColor: theme.editorBg,
-        borderColor: theme.border,
-        color: theme.text
-      }}
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={handleDrop}
-    >
-      {/* Editor Top Bar — unchanged */}
-      <div 
-        className="flex items-center justify-between px-3 py-1.5 border-b text-xs font-mono select-none"
-        style={{
-          backgroundColor: theme.panelBg,
-          borderColor: theme.border,
-          color: theme.textMuted
-        }}
+        editor.revealLineInCenter(errorLine);
+      } else {
+        monaco.editor.setModelMarkers(model, 'js-console-runtime', []);
+        decorationsRef.current = editor.deltaDecorations(decorationsRef.current, []);
+      }
+    }, [errorLine]);
+
+    // Keep the inline rename field in sync when the language (and therefore
+    // the active file name) changes.
+    useEffect(() => setDraftName(fileName), [fileName]);
+
+    useEffect(() => {
+      if (!editingName) return;
+      const input = nameInputRef.current;
+      if (!input) return;
+      input.focus();
+      input.select();
+    }, [editingName]);
+
+    const startRenaming = () => {
+      cancelRenameRef.current = false;
+      setDraftName(fileName);
+      setEditingName(true);
+    };
+
+    const commitFileName = () => {
+      if (cancelRenameRef.current) {
+        cancelRenameRef.current = false;
+        setEditingName(false);
+        return;
+      }
+
+      const next = draftName.trim();
+      onFileNameChange(next || fileName);
+      setDraftName(next || fileName);
+      setEditingName(false);
+    };
+
+    const cancelRenaming = () => {
+      cancelRenameRef.current = true;
+      setDraftName(fileName);
+      setEditingName(false);
+    };
+
+    return (
+      <div
+        className="relative flex h-full w-full flex-col overflow-hidden border-r"
+        style={{ backgroundColor: theme.editorBg, borderColor: theme.border, color: theme.text }}
+        onDragEnter={handleDragEnter}
+        onDragOver={(event) => event.preventDefault()}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
       >
-        <div className="flex items-center gap-2">
-          <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold ${
-            isLight ? 'bg-sky-100 text-sky-800 border border-sky-200' : 'bg-black/20 text-sky-400'
-          }`}>
-            <FileCode className="w-3.5 h-3.5" />
-            <span>script.js</span>
-          </div>
-          <span className="text-[11px] opacity-75">
-            {lineCount} {lineCount === 1 ? 'line' : 'lines'}, {code.length} chars
-          </span>
-        </div>
-
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={() => setShowSearch(!showSearch)}
-            className={`p-1 rounded transition-colors ${
-              isLight ? 'hover:bg-slate-200' : 'hover:bg-white/10'
-            } ${showSearch ? 'text-sky-500 font-bold' : ''}`}
-            title="Search Code (Ctrl+F also works inside the editor)"
-          >
-            <Search className="w-3.5 h-3.5" />
-          </button>
-
-          <button
-            onClick={formatJSCode}
-            className={`p-1 rounded transition-colors flex items-center gap-1 text-[11px] ${
-              isLight ? 'hover:bg-slate-200' : 'hover:bg-white/10'
-            }`}
-            title="Format Code Spacing & Indents"
-          >
-            <Wand2 className="w-3.5 h-3.5 text-amber-500" />
-            <span className="hidden lg:inline">Format</span>
-          </button>
-
-          <button
-            onClick={handleCopy}
-            className={`p-1 rounded transition-colors flex items-center gap-1 text-[11px] ${
-              isLight ? 'hover:bg-slate-200' : 'hover:bg-white/10'
-            }`}
-            title="Copy Code"
-          >
-            {copied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
-          </button>
-        </div>
-      </div>
-
-      {/* Optional Search Bar — unchanged */}
-      {showSearch && (
-        <div 
-          className="flex items-center gap-2 px-3 py-1.5 border-b text-xs"
-          style={{ backgroundColor: theme.bg, borderColor: theme.border }}
+        {/* Editor toolbar */}
+        <div
+          className="flex shrink-0 select-none items-center justify-between gap-2 border-b px-3 py-1.5 font-mono text-xs"
+          style={{ backgroundColor: theme.panelBg, borderColor: theme.border }}
         >
-          <Search className="w-3.5 h-3.5 text-gray-400" />
-          <input
-            type="text"
-            placeholder="Find in code..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="bg-transparent outline-none flex-1 font-mono text-xs"
-            style={{ color: theme.text }}
-          />
-          {searchQuery && (
-            <span className="text-[10px] text-gray-400">
-              {(code.match(new RegExp(searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')) || []).length} matches
+          <div className="flex min-w-0 items-center gap-2">
+            {editingName ? (
+              <div
+                className="flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1"
+                style={{
+                  backgroundColor: withHexAlpha(theme.accent, light ? 0.1 : 0.13),
+                  border: `1px solid ${withHexAlpha(theme.accent, 0.45)}`,
+                  boxShadow: `0 0 0 2px ${withHexAlpha(theme.accent, 0.12)}`,
+                }}
+              >
+                <FileCode className="h-3.5 w-3.5 shrink-0" style={{ color: theme.accent }} />
+                <input
+                  ref={nameInputRef}
+                  value={draftName}
+                  onChange={(event) => setDraftName(event.target.value)}
+                  onBlur={commitFileName}
+                  onKeyDown={(event) => {
+                    event.stopPropagation();
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      event.currentTarget.blur();
+                    } else if (event.key === 'Escape') {
+                      event.preventDefault();
+                      cancelRenaming();
+                    }
+                  }}
+                  maxLength={64}
+                  spellCheck={false}
+                  aria-label="File name"
+                  className="w-28 select-text bg-transparent font-mono text-[11px] font-semibold outline-none sm:w-36"
+                  style={{ color: theme.accent }}
+                />
+                <span
+                  className="h-1.5 w-1.5 shrink-0 rounded-full"
+                  style={{ background: languageConfig.color }}
+                />
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={startRenaming}
+                className="group flex min-w-0 max-w-[10rem] items-center gap-1.5 rounded-md px-2 py-1 font-mono text-[11px] font-semibold transition-colors hover:brightness-110 sm:max-w-[14rem]"
+                style={{
+                  backgroundColor: withHexAlpha(theme.accent, light ? 0.1 : 0.13),
+                  color: theme.accent,
+                  border: `1px solid ${withHexAlpha(theme.accent, 0.2)}`,
+                }}
+                title="Click to rename the file"
+                aria-label={`Rename file ${fileName}`}
+              >
+                <FileCode className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">{fileName}</span>
+                <Pencil className="h-2.5 w-2.5 shrink-0 opacity-60 transition-opacity group-hover:opacity-100" />
+                <span
+                  className="h-1.5 w-1.5 shrink-0 rounded-full"
+                  style={{ background: languageConfig.color }}
+                />
+              </button>
+            )}
+            <span className="hidden truncate text-[11px] opacity-70 sm:inline" style={{ color: theme.textMuted }}>
+              {languageConfig.label} · {lineCount} {lineCount === 1 ? 'line' : 'lines'} · {code.length} chars
             </span>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-0.5">
+            <button
+              type="button"
+              onClick={openFind}
+              className="ui-btn ui-btn--ghost ui-btn--icon h-7 w-7"
+              title="Find in code (Ctrl + F)"
+              aria-label="Find in code"
+            >
+              <Search className="h-3.5 w-3.5" />
+            </button>
+
+            {language === 'javascript' && (
+              <button
+                type="button"
+                onClick={() => void formatJSCode()}
+                className="ui-btn ui-btn--ghost h-7 gap-1 px-1.5 text-[11px]"
+                title="Format document (Shift + Alt + F)"
+              >
+                <Wand2 className="h-3.5 w-3.5" style={{ color: '#f59e0b' }} />
+                <span className="hidden lg:inline">Format</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => void handleCopy()}
+              className="ui-btn ui-btn--ghost ui-btn--icon h-7 w-7"
+              title="Copy code"
+              aria-label="Copy code"
+            >
+              {copied ? (
+                <Check className="h-3.5 w-3.5" style={{ color: '#34d399' }} />
+              ) : (
+                <Copy className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Editing surface */}
+        <div className="relative min-h-0 flex-1 overflow-hidden">
+          <Editor
+            height="100%"
+            language={languageConfig.monacoLanguage}
+            value={code}
+            onChange={(value) => setCode(value ?? '')}
+            beforeMount={beforeMount}
+            onMount={handleEditorMount}
+            theme={editorThemeName(theme)}
+            loading={
+              <div className="flex h-full items-center justify-center text-xs" style={{ color: theme.textMuted }}>
+                Loading editor…
+              </div>
+            }
+            options={{
+              fontSize: settings.fontSize,
+              fontFamily: "'JetBrains Mono', 'Fira Code', Consolas, 'Courier New', monospace",
+              fontLigatures: true,
+              tabSize: settings.tabSize,
+              wordWrap: settings.wordWrap ? 'on' : 'off',
+              lineNumbers: settings.lineNumbers ? 'on' : 'off',
+              renderLineHighlight: settings.showLineHighlight ? 'line' : 'none',
+              autoClosingBrackets: settings.autoCloseBrackets ? 'always' : 'never',
+              minimap: { enabled: false },
+              scrollBeyondLastLine: false,
+              automaticLayout: true,
+              glyphMargin: true,
+              padding: { top: 14, bottom: 14 },
+              smoothScrolling: true,
+              cursorBlinking: 'smooth',
+              cursorSmoothCaretAnimation: 'on',
+              renderWhitespace: 'selection',
+              bracketPairColorization: { enabled: true },
+              guides: { bracketPairs: true, indentation: true },
+              scrollbar: {
+                verticalScrollbarSize: 10,
+                horizontalScrollbarSize: 10,
+                useShadows: false,
+              },
+              overviewRulerBorder: false,
+              hideCursorInOverviewRuler: true,
+              fixedOverflowWidgets: true,
+            }}
+          />
+
+          {isDragging && (
+            <div
+              className="pointer-events-none absolute inset-3 z-20 flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed backdrop-blur-sm"
+              style={{
+                borderColor: theme.accent,
+                backgroundColor: withHexAlpha(theme.bg, 0.75),
+                color: theme.accent,
+              }}
+            >
+              <UploadCloud className="h-7 w-7" />
+              <p className="text-sm font-semibold">Drop a file to load it</p>
+              <p className="text-[11px]" style={{ color: theme.textMuted }}>
+                .js, .py, .cpp, .c or any text file
+              </p>
+            </div>
           )}
         </div>
-      )}
-
-      {/* Main Code Editing Canvas — Monaco, with error-line gutter enabled */}
-      <div className="flex-1 overflow-hidden relative">
-        <Editor
-          height="100%"
-          defaultLanguage="javascript"
-          value={code}
-          onChange={(value) => setCode(value ?? '')}
-          onMount={handleEditorMount}
-          theme={isLight ? 'light' : 'vs-dark'}
-          options={{
-            fontSize: settings.fontSize,
-            tabSize: settings.tabSize,
-            wordWrap: settings.wordWrap ? 'on' : 'off',
-            lineNumbers: settings.lineNumbers ? 'on' : 'off',
-            renderLineHighlight: settings.showLineHighlight ? 'line' : 'none',
-            autoClosingBrackets: settings.autoCloseBrackets ? 'always' : 'never',
-            minimap: { enabled: false },
-            scrollBeyondLastLine: false,
-            automaticLayout: true,
-            glyphMargin: true,
-            padding: { top: 12 },
-          }}
-        />
       </div>
-    </div>
-  );
-});
+    );
+  }
+);
+
+CodeEditor.displayName = 'CodeEditor';

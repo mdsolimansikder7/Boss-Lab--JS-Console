@@ -1,66 +1,82 @@
-import React, { useState, useEffect } from 'react';
-import { ThemeConfig } from '../types';
+import React, { useEffect, useState } from 'react';
+import { LanguageId, ThemeConfig } from '../types';
+import { LANGUAGES } from '../utils/languages';
 
 interface FooterProps {
   status: string;
   cursorLine: number;
   theme: ThemeConfig;
   isRunning: boolean;
+  charCount: number;
+  lineCount: number;
+  language: LanguageId;
+  fileName: string;
 }
 
 export const Footer: React.FC<FooterProps> = ({
   status,
   cursorLine,
   theme,
-  isRunning
+  isRunning,
+  charCount,
+  lineCount,
+  language,
+  fileName,
 }) => {
   const [time, setTime] = useState<string>('');
 
   useEffect(() => {
-    const updateTime = () => {
-      setTime(new Date().toLocaleTimeString());
+    const update = () => {
+      const now = new Date();
+      setTime(now.toLocaleTimeString([], { hour12: false }));
     };
-    updateTime();
-    const interval = setInterval(updateTime, 1000);
-    return () => clearInterval(interval);
+    update();
+    const interval = window.setInterval(update, 1000);
+    return () => window.clearInterval(interval);
   }, []);
 
+  const isError = /error|failed/i.test(status);
+
   return (
-    <footer 
-      className="flex items-center justify-between px-4 py-1.5 border-t text-[11px] font-mono select-none transition-colors duration-200"
-      style={{
-        backgroundColor: theme.panelBg,
-        borderColor: theme.border,
-        color: theme.textMuted
-      }}
+    <footer
+      className="flex h-7 shrink-0 select-none items-center justify-between gap-3 border-t px-3 font-mono text-[11px]"
+      style={{ backgroundColor: theme.panelBg, borderColor: theme.border, color: theme.textMuted }}
     >
-      {/* Left: Status */}
-      <div className="flex items-center gap-2">
-        <span 
-          className={`w-2 h-2 rounded-full ${
-            isRunning 
-              ? 'bg-amber-400 animate-ping' 
-              : status.includes('Error') || status.includes('Failed')
-              ? 'bg-red-400'
-              : 'bg-emerald-400'
-          }`} 
-        />
-        <span className="font-semibold text-gray-300">{status}</span>
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="relative flex h-2 w-2 shrink-0">
+          {isRunning && (
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-70" />
+          )}
+          <span
+            className="relative inline-flex h-2 w-2 rounded-full"
+            style={{ backgroundColor: isRunning ? '#fbbf24' : isError ? '#f87171' : '#34d399' }}
+          />
+        </span>
+        <span className="truncate font-semibold" style={{ color: theme.text }}>
+          {status}
+        </span>
       </div>
 
-      {/* Center: Cursor Line */}
-      <div className="hidden sm:flex items-center gap-3 text-gray-400">
-        <span>Line {cursorLine}</span>
-        <span>•</span>
-        <span>UTF-8</span>
-        <span>•</span>
-        <span>JavaScript (ES6+)</span>
+      <div className="hidden items-center gap-2.5 sm:flex">
+        <span>{fileName}</span>
+        <span style={{ color: theme.border }}>|</span>
+        <span>Ln {cursorLine}</span>
+        <span style={{ color: theme.border }}>|</span>
+        <span>
+          {lineCount} {lineCount === 1 ? 'line' : 'lines'} · {charCount} chars
+        </span>
+        <span style={{ color: theme.border }}>|</span>
+        <span>UTF-8 · {LANGUAGES[language].label}</span>
       </div>
 
-      {/* Right: Clock & Shortcut */}
-      <div className="flex items-center gap-3">
-        <span className="hidden md:inline opacity-75">Ctrl + Enter to Run</span>
-        <span className="text-sky-400 font-semibold">{time}</span>
+      <div className="flex shrink-0 items-center gap-3">
+        <span className="hidden items-center gap-1 md:flex">
+          <kbd className="ui-kbd">Ctrl ↵</kbd>
+          <span>Run</span>
+        </span>
+        <span className="font-semibold" style={{ color: theme.accent }}>
+          {time}
+        </span>
       </div>
     </footer>
   );

@@ -1,4 +1,4 @@
-import { LogEntry, LogType } from '../types';
+import { LogEntry } from '../types';
 
 export interface ExecutionResult {
   success: boolean;
@@ -9,8 +9,7 @@ export interface ExecutionResult {
 
 // The runner wraps user code like this before executing it via `new Function(...)`:
 //
-//   function anonymous(console,fetch,setTimeout,setInterval,clearTimeout,clearInterval,performance
-//   ) {
+//   function anonymous(console, fetch, setTimeout, ...) {
 //   return (async () => {
 //     <user code line 1>
 //     <user code line 2>
@@ -18,55 +17,65 @@ export interface ExecutionResult {
 //   })();
 //   }
 //
-// V8 always adds 2 header lines for the function signature, plus our own
-// "return (async () => {" wrapper line — so user code line N always starts
-// at internal line (N + 3). This offset is what lets us map a runtime error's
-// internal line number back to the exact line the user actually wrote.
+// V8 always adds 3 header lines, so user code line N starts at internal line
+// (N + 3). The sourceURL comment below makes stack frames report
+// `bosslab-user-code.js:L:C`, which is far more reliable to parse than the old
+// `eval at <anonymous>` frames.
 const WRAPPER_LINE_OFFSET = 3;
+const SOURCE_URL = 'bosslab-user-code.js';
 
-// Helper to extract the exact line number from an error
+/** Helper to extract the exact line number from an error. */
 export function extractErrorLine(err: any, code: string): number | undefined {
   if (!err) return undefined;
 
   const totalLines = code.split('\n').length;
+  const toUserLine = (raw: number) => raw - WRAPPER_LINE_OFFSET;
+  const valid = (line: number) => line >= 1 && line <= totalLines;
 
   // Direct line number property (Firefox / Safari / V8 extensions)
   if (typeof err.lineNumber === 'number' && err.lineNumber > 0) {
-    const line = err.lineNumber - WRAPPER_LINE_OFFSET;
-    if (line >= 1 && line <= totalLines) return line;
+    const line = toUserLine(err.lineNumber);
+    if (valid(line)) return line;
   }
 
-  // Parse stack trace
   const stack = err?.stack;
-  if (typeof stack === 'string') {
-    // Pattern 1: <anonymous>:L:C in V8
-    const anonMatches = [...stack.matchAll(/<anonymous>:(\d+):(\d+)/g)];
-    for (const match of anonMatches) {
-      const rawLine = parseInt(match[1], 10);
-      const userLine = rawLine - WRAPPER_LINE_OFFSET;
-      if (userLine >= 1 && userLine <= totalLines) {
-        return userLine;
-      }
-    }
+  if (typeof stack !== 'string') return undefined;
 
-    // Pattern 2: eval / Function:L:C
-    const fnMatches = [...stack.matchAll(/(?:eval|Function):(\d+):(\d+)/gi)];
-    for (const match of fnMatches) {
-      const rawLine = parseInt(match[1], 10);
-      const userLine = rawLine - WRAPPER_LINE_OFFSET;
-      if (userLine >= 1 && userLine <= totalLines) {
-        return userLine;
-      }
-    }
+  // Best case: frames named through the sourceURL comment.
+  const ownFile = new RegExp(`${SOURCE_URL.replace('.', '\\.')}:(\\d+):(\\d+)`, 'g');
+  const ownMatches = [...stack.matchAll(ownFile)];
+  for (const match of ownMatches) {
+    const rawLine = parseInt(match[1], 10);
+    const userLine = toUserLine(rawLine);
+    if (valid(userLine)) return userLine;
+  }
 
-    // Pattern 3: Line X or line X in error message/stack
-    const lineMsgMatch = stack.match(/line\s+(\d+)/i) || (err?.message && err.message.match(/line\s+(\d+)/i));
-    if (lineMsgMatch) {
-      const parsedLine = parseInt(lineMsgMatch[1], 10);
-      if (parsedLine >= 1 && parsedLine <= totalLines) {
-        return parsedLine;
-      }
+  // Fallback: read the LAST location of the FIRST anonymous frame. The first
+  // match is often the `eval at <anonymous> (:5:16)` call-site, which pointed at
+  // the wrong user line before.
+  const firstFrame = stack.split('\n').find((line) => line.includes('<anonymous>:'));
+  if (firstFrame) {
+    const matches = [...firstFrame.matchAll(/<anonymous>:(\d+):(\d+)/g)];
+    for (const match of matches.reverse()) {
+      const userLine = toUserLine(parseInt(match[1], 10));
+      if (valid(userLine)) return userLine;
     }
+  }
+
+  const anonMatches = [...stack.matchAll(/<anonymous>:(\d+):(\d+)/g)];
+  for (const match of anonMatches) {
+    const userLine = toUserLine(parseInt(match[1], 10));
+    if (valid(userLine)) return userLine;
+  }
+
+  // Last resort: "line 12" inside the message/stack.
+  const lineMsgMatch =
+    stack.match(/line\s+(\d+)/i) || (err?.message && String(err.message).match(/line\s+(\d+)/i));
+  if (lineMsgMatch) {
+    const parsedLine = parseInt(lineMsgMatch[1], 10);
+    const userLine = toUserLine(parsedLine);
+    if (valid(userLine)) return userLine;
+    if (valid(parsedLine)) return parsedLine;
   }
 
   return undefined;
@@ -81,18 +90,23 @@ export function evaluateJavaScript(
     const timers = new Map<string, number>();
     const counters = new Map<string, number>();
 
-    // Helper to format timestamps
     const getTimestamp = () => {
       const now = new Date();
       return now.toTimeString().split(' ')[0] + '.' + String(now.getMilliseconds()).padStart(3, '0');
     };
 
-    // Safe id generator
     const generateId = () => Math.random().toString(36).substring(2, 9);
 
-    // Custom console methods
     const customConsole = {
       log: (...args: any[]) => {
+        onLog({
+          id: generateId(),
+          type: 'log',
+          content: args.length === 1 ? args[0] : args,
+          timestamp: getTimestamp()
+        });
+      },
+      debug: (...args: any[]) => {
         onLog({
           id: generateId(),
           type: 'log',
@@ -148,6 +162,16 @@ export function evaluateJavaScript(
           timestamp: getTimestamp()
         });
       },
+      trace: (...args: any[]) => {
+        const stack = new Error(args.join(' ')).stack;
+        onLog({
+          id: generateId(),
+          type: 'info',
+          content: args.length ? args : ['Trace'],
+          stack,
+          timestamp: getTimestamp()
+        });
+      },
       assert: (condition: boolean, ...args: any[]) => {
         if (!condition) {
           const message = args.length > 0 ? args.join(' ') : 'Assertion failed';
@@ -161,6 +185,25 @@ export function evaluateJavaScript(
       },
       time: (label: string = 'default') => {
         timers.set(label, performance.now());
+      },
+      timeLog: (label: string = 'default') => {
+        const start = timers.get(label);
+        if (start === undefined) {
+          onLog({
+            id: generateId(),
+            type: 'warn',
+            content: `Timer '${label}' does not exist`,
+            timestamp: getTimestamp()
+          });
+          return;
+        }
+        const duration = performance.now() - start;
+        onLog({
+          id: generateId(),
+          type: 'info',
+          content: `${label}: ${duration.toFixed(3)} ms`,
+          timestamp: getTimestamp()
+        });
       },
       timeEnd: (label: string = 'default') => {
         const start = timers.get(label);
@@ -201,12 +244,7 @@ export function evaluateJavaScript(
       }
     };
 
-    // Save window console
-    const originalConsole = window.console;
-
     try {
-      // Allow top-level await by wrapping in an async function body
-      // We pass customConsole as console
       const runnerFn = new Function(
         'console',
         'fetch',
@@ -216,11 +254,11 @@ export function evaluateJavaScript(
         'clearInterval',
         'performance',
         `return (async () => {
-          ${code}
-        })();`
+${code}
+})();
+//# sourceURL=${SOURCE_URL}`
       );
 
-      // Execute
       const resultPromise = runnerFn(
         customConsole,
         window.fetch.bind(window),
@@ -236,7 +274,6 @@ export function evaluateJavaScript(
           const endTime = performance.now();
           const executionTimeMs = Number((endTime - startTime).toFixed(2));
 
-          // If function returned a non-undefined value, log it as result
           if (val !== undefined) {
             onLog({
               id: generateId(),
@@ -246,60 +283,44 @@ export function evaluateJavaScript(
             });
           }
 
-          resolve({
-            success: true,
-            executionTimeMs,
-            returnValue: val
-          });
+          resolve({ success: true, executionTimeMs, returnValue: val });
         })
         .catch((err: any) => {
           const endTime = performance.now();
           const executionTimeMs = Number((endTime - startTime).toFixed(2));
           const errorMessage = err?.message || String(err);
-          const stack = err?.stack;
-          const errorLine = extractErrorLine(err, code);
 
           onLog({
             id: generateId(),
             type: 'error',
-            content: errorMessage,
-            stack,
-            line: errorLine,
+            content: `${err?.name || 'Error'}: ${errorMessage}`,
+            stack: err?.stack,
+            line: extractErrorLine(err, code),
             timestamp: getTimestamp()
           });
 
-          resolve({
-            success: false,
-            executionTimeMs,
-            error: errorMessage
-          });
+          resolve({ success: false, executionTimeMs, error: errorMessage });
         });
     } catch (err: any) {
       const endTime = performance.now();
       const executionTimeMs = Number((endTime - startTime).toFixed(2));
       const errorMessage = err?.message || String(err);
-      const stack = err?.stack;
-      const errorLine = extractErrorLine(err, code);
 
       onLog({
         id: generateId(),
         type: 'error',
-        content: errorMessage,
-        stack,
-        line: errorLine,
+        content: `${err?.name || 'Error'}: ${errorMessage}`,
+        stack: err?.stack,
+        line: extractErrorLine(err, code),
         timestamp: getTimestamp()
       });
 
-      resolve({
-        success: false,
-        executionTimeMs,
-        error: errorMessage
-      });
+      resolve({ success: false, executionTimeMs, error: errorMessage });
     }
   });
 }
 
-// Function to format JS objects into clean strings or inspectable structures
+/** Format a value as a compact display string. */
 export function formatValueForDisplay(val: any): string {
   if (val === null) return 'null';
   if (val === undefined) return 'undefined';

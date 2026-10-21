@@ -1,3 +1,5 @@
+export type LanguageId = 'javascript' | 'python' | 'cpp' | 'c';
+
 export type LogType = 'log' | 'warn' | 'error' | 'info' | 'table' | 'clear' | 'system' | 'result';
 
 export interface LogEntry {
@@ -19,11 +21,20 @@ export interface Snippet {
   category: 'Beginner' | 'Data Structures' | 'Async & Fetch' | 'Algorithms' | 'Fun & Utility' | 'Saved';
   description: string;
   code: string;
+  language?: LanguageId;
   isCustom?: boolean;
   createdAt?: string;
 }
 
-export type ThemeId = 'midnight' | 'github-dark' | 'monokai' | 'matrix' | 'dracula' | 'light';
+export type ThemeId =
+  | 'midnight'
+  | 'github-dark'
+  | 'monokai'
+  | 'matrix'
+  | 'dracula'
+  | 'nord'
+  | 'sunset'
+  | 'light';
 
 export interface ThemeConfig {
   id: ThemeId;

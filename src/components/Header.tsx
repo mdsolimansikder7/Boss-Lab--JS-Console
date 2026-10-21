@@ -1,35 +1,39 @@
-import React from 'react';
-import { 
-  Play, 
-  Trash2, 
-  Code2, 
-  Settings, 
-  Share2, 
-  Download, 
-  Sparkles, 
-  Palette, 
-  Columns, 
-  SquareCode, 
-  Terminal, 
-  Rows,
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Play,
+  Loader2,
+  Settings as SettingsIcon,
+  Share2,
+  Download,
   BookOpen,
-  Copy,
+  Columns2,
+  SquareCode,
+  Terminal,
+  Rows3,
+  Sun,
+  Moon,
+  ChevronDown,
+  Search,
   Check,
   FlaskConical,
-  Crown
+  Sparkles,
+  ArrowRight,
 } from 'lucide-react';
-import { LayoutMode, Snippet, ThemeId } from '../types';
-import { THEMES } from '../utils/theme';
+import { LayoutMode, LanguageId, Snippet, ThemeId } from '../types';
+import { isLightTheme, THEMES, withAlpha } from '../utils/theme';
+import { LANGUAGE_ORDER, LANGUAGES } from '../utils/languages';
 
 interface HeaderProps {
   theme: ThemeId;
-  setTheme: (t: ThemeId) => void;
+  onToggleAppearance: () => void;
+  language: LanguageId;
+  setLanguage: (language: LanguageId) => void;
+  fileName: string;
   layoutMode: LayoutMode;
   setLayoutMode: (m: LayoutMode) => void;
   snippets: Snippet[];
   onSelectSnippet: (snippet: Snippet) => void;
   onRun: () => void;
-  onClear: () => void;
   onOpenSnippetsModal: () => void;
   onOpenSettingsModal: () => void;
   onDownloadCode: () => void;
@@ -41,15 +45,212 @@ interface HeaderProps {
   logsCount?: number;
 }
 
+const LAYOUTS: { id: LayoutMode; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+  { id: 'split', label: 'Split view', icon: Columns2 },
+  { id: 'editor-only', label: 'Editor focus', icon: SquareCode },
+  { id: 'console-only', label: 'Console focus', icon: Terminal },
+  { id: 'stacked', label: 'Stacked view', icon: Rows3 },
+];
+
+const ExamplesMenu: React.FC<{
+  snippets: Snippet[];
+  language: LanguageId;
+  onSelectSnippet: (snippet: Snippet) => void;
+  onOpenSnippetsModal: () => void;
+  className?: string;
+}> = ({ snippets, language, onSelectSnippet, onOpenSnippetsModal, className = '' }) => {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const onPointerDown = (event: MouseEvent) => {
+      if (!boxRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
+  const filtered = useMemo(() => {
+    const languageSnippets = snippets.filter(
+      (snippet) => !snippet.isCustom && (snippet.language ?? 'javascript') === language
+    );
+    const q = query.trim().toLowerCase();
+    if (!q) return languageSnippets;
+    return languageSnippets.filter(
+      (s) =>
+        s.title.toLowerCase().includes(q) ||
+        s.description.toLowerCase().includes(q) ||
+        s.category.toLowerCase().includes(q)
+    );
+  }, [snippets, language, query]);
+
+  const languageConfig = LANGUAGES[language];
+
+  return (
+    <div ref={boxRef} className={`relative ${className}`}>
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Examples"
+        className="ui-btn w-full justify-between gap-2"
+        title={`Load a ${languageConfig.label} example`}
+      >
+        <span className="flex min-w-0 items-center gap-1.5">
+          <Sparkles className="h-3.5 w-3.5 shrink-0" style={{ color: 'var(--accent)' }} />
+          <span className="inline truncate lg:hidden xl:inline">Examples</span>
+        </span>
+        <ChevronDown
+          className={`h-3.5 w-3.5 shrink-0 opacity-70 transition-transform ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
+
+      {open && (
+        <div
+          role="menu"
+          className="animate-fadeIn fixed inset-x-3 top-[9rem] z-50 flex max-h-[calc(100dvh-10rem)] w-auto flex-col overflow-hidden rounded-xl border shadow-2xl sm:absolute sm:inset-x-auto sm:left-0 sm:top-full sm:mt-2 sm:w-[min(23rem,calc(100vw-1.5rem))]"
+          style={{
+            background: 'var(--panel-bg)',
+            borderColor: 'var(--border)',
+            boxShadow: '0 24px 60px -24px rgba(0,0,0,0.7)',
+          }}
+        >
+          <div className="border-b p-2" style={{ borderColor: 'var(--border)' }}>
+            <div className="relative">
+              <Search
+                className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+                style={{ color: 'var(--text-muted)' }}
+              />
+              <input
+                autoFocus
+                type="text"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={`Search ${languageConfig.short} examples…`}
+                className="ui-input h-8 w-full pl-8 pr-2 text-xs"
+                aria-label={`Search ${languageConfig.label} example snippets`}
+              />
+            </div>
+          </div>
+
+          <div className="max-h-[19rem] min-h-0 flex-1 overflow-y-auto p-1.5">
+            {filtered.length === 0 ? (
+              <p className="px-3 py-6 text-center text-xs" style={{ color: 'var(--text-muted)' }}>
+                {query
+                  ? `No ${languageConfig.label} examples match “${query}”.`
+                  : `No ${languageConfig.label} examples yet.`}
+              </p>
+            ) : (
+              filtered.map((snippet) => (
+                <button
+                  key={snippet.id}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onSelectSnippet(snippet);
+                    setOpen(false);
+                    setQuery('');
+                  }}
+                  className="flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-[var(--hover)]"
+                >
+                  <span
+                    className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full"
+                    style={{ background: languageConfig.color }}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-xs font-medium" style={{ color: 'var(--text)' }}>
+                      {snippet.title}
+                    </span>
+                    <span
+                      className="mt-0.5 block truncate text-[11px]"
+                      style={{ color: 'var(--text-muted)' }}
+                    >
+                      {snippet.category} · {snippet.description}
+                    </span>
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              setQuery('');
+              onOpenSnippetsModal();
+            }}
+            className="flex w-full items-center justify-between border-t px-3 py-2 text-[11px] font-semibold transition-colors hover:bg-[var(--hover)]"
+            style={{ borderColor: 'var(--border)', color: 'var(--accent)' }}
+          >
+            Browse the full snippets library
+            <ArrowRight className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const LanguageNav: React.FC<{
+  language: LanguageId;
+  setLanguage: (language: LanguageId) => void;
+  className?: string;
+}> = ({ language, setLanguage, className = '' }) => (
+  <div
+    className={`ui-lang-nav ${className}`}
+    role="tablist"
+    aria-label="Choose language"
+  >
+    {LANGUAGE_ORDER.map((id) => {
+      const option = LANGUAGES[id];
+      const active = id === language;
+
+      return (
+        <button
+          key={id}
+          type="button"
+          role="tab"
+          aria-selected={active}
+          aria-label={`${option.label} — ${option.hint}`}
+          title={`${option.label} · ${option.hint}`}
+          data-active={active}
+          onClick={() => setLanguage(id)}
+          className="ui-lang-tab"
+          style={{ '--lang': option.color } as React.CSSProperties}
+        >
+          <span className="ui-lang-dot" aria-hidden="true" />
+          <span className="xl:hidden">{option.short}</span>
+          <span className="hidden xl:inline">{option.label}</span>
+        </button>
+      );
+    })}
+  </div>
+);
+
 export const Header: React.FC<HeaderProps> = ({
   theme,
-  setTheme,
+  onToggleAppearance,
+  language,
+  setLanguage,
+  fileName,
   layoutMode,
   setLayoutMode,
   snippets,
   onSelectSnippet,
   onRun,
-  onClear,
   onOpenSnippetsModal,
   onOpenSettingsModal,
   onDownloadCode,
@@ -58,311 +259,299 @@ export const Header: React.FC<HeaderProps> = ({
   isRunning,
   mobileTab,
   setMobileTab,
-  logsCount = 0
+  logsCount = 0,
 }) => {
   const currentTheme = THEMES[theme];
+  const light = isLightTheme(theme);
 
   return (
-    <header 
-      className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-2.5 px-3 md:px-4 py-2 border-b select-none transition-colors duration-200"
-      style={{
-        backgroundColor: currentTheme.panelBg,
-        borderColor: currentTheme.border,
-        color: currentTheme.text
-      }}
+    <header
+      role="banner"
+      className="relative z-30 shrink-0 border-b"
+      style={{ backgroundColor: currentTheme.panelBg, borderColor: currentTheme.border }}
     >
-      {/* Top Row on Mobile / Left Section on Desktop */}
-      <div className="flex items-center justify-between gap-2 w-full md:w-auto">
-        {/* Brand & Title */}
-        <div className="flex items-center gap-2">
-          <div 
-            className="flex items-center justify-center w-8 h-8 md:w-9 md:h-9 rounded-xl font-mono font-bold text-sm shadow-md transition-all relative shrink-0"
+      {/* Primary bar */}
+      <div className="flex h-14 items-center gap-2 px-3 sm:px-4">
+        {/* Brand */}
+        <div className="flex shrink-0 select-none items-center gap-2.5">
+          <div
+            className="grid h-9 w-9 place-items-center rounded-xl"
             style={{
-              backgroundColor: `${currentTheme.accent}20`,
+              background: `linear-gradient(140deg, ${withAlpha(currentTheme.accent, 0.24)}, ${withAlpha(
+                currentTheme.accent,
+                0.05
+              )})`,
+              border: `1px solid ${withAlpha(currentTheme.accent, 0.35)}`,
               color: currentTheme.accent,
-              border: `1.5px solid ${currentTheme.accent}55`
             }}
           >
-            <FlaskConical className="w-4 h-4 md:w-5 md:h-5 text-current animate-pulse" />
-            <Crown className="w-3 h-3 absolute -top-1.5 -right-1.5 text-amber-400 fill-amber-400 drop-shadow" />
+            <FlaskConical className="h-4 w-4" />
           </div>
-          <div>
+          <div className="leading-none">
             <div className="flex items-center gap-1.5">
-              <h1 className="font-extrabold text-base md:text-lg tracking-tight flex items-center">
-                <span style={{ color: currentTheme.text }}>Boss</span>
-                <span style={{ color: currentTheme.accent }}>Lab</span>
-              </h1>
-              <span 
-                className="text-[9px] md:text-[10px] uppercase font-bold px-1.5 py-0.5 rounded font-mono border"
+              <span className="text-[15px] font-extrabold tracking-tight" style={{ color: currentTheme.text }}>
+                Boss<span style={{ color: currentTheme.accent }}>Lab</span>
+              </span>
+              <span
+                className="hidden rounded-md border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider sm:inline-block"
                 style={{
-                  backgroundColor: `${currentTheme.accent}15`,
+                  borderColor: withAlpha(currentTheme.accent, 0.25),
+                  backgroundColor: withAlpha(currentTheme.accent, 0.1),
                   color: currentTheme.accent,
-                  borderColor: `${currentTheme.accent}33`
                 }}
               >
-                JS Playground
+                Play
               </span>
             </div>
+            <p
+              className="mt-1 hidden text-[10px] font-medium uppercase tracking-[0.16em] sm:block"
+              style={{ color: currentTheme.textMuted }}
+            >
+              Multi-language Playground
+            </p>
           </div>
         </div>
 
-        {/* Primary Run & Clear Buttons on Mobile Header Right */}
-        <div className="flex items-center gap-1.5 md:hidden">
+        <div
+          className="mx-1 hidden h-7 w-px shrink-0 sm:block"
+          style={{ backgroundColor: currentTheme.border }}
+        />
+
+        {/* Desktop: language, examples + library */}
+        <div className="hidden min-w-0 items-center gap-1.5 lg:flex">
+          <LanguageNav language={language} setLanguage={setLanguage} />
+          <ExamplesMenu
+            snippets={snippets}
+            language={language}
+            onSelectSnippet={onSelectSnippet}
+            onOpenSnippetsModal={onOpenSnippetsModal}
+            className="shrink-0"
+          />
           <button
+            type="button"
+            onClick={onOpenSnippetsModal}
+            className="ui-btn shrink-0"
+            title="Open snippets library (Ctrl + K)"
+            aria-label="Open snippets library"
+          >
+            <BookOpen className="h-3.5 w-3.5" style={{ color: 'var(--accent)' }} />
+            <span className="hidden xl:inline">Snippets</span>
+          </button>
+        </div>
+
+        <div className="flex-1" />
+
+        {/* Desktop actions */}
+        <div className="hidden items-center gap-1.5 lg:flex">
+          <button
+            type="button"
             onClick={onRun}
             disabled={isRunning}
-            className="flex items-center gap-1 px-3 py-1.5 rounded-lg font-bold text-xs shadow-md transition-all active:scale-95 disabled:opacity-50 touch-manipulation"
-            style={{
-              backgroundColor: currentTheme.accent,
-              color: theme === 'light' ? '#ffffff' : '#000000'
-            }}
-            title="Run JavaScript Code"
+            className="ui-btn ui-btn--primary h-8 px-3.5"
+            title={`Run ${LANGUAGES[language].label} (Ctrl + Enter)`}
           >
-            <Play className={`w-3.5 h-3.5 fill-current ${isRunning ? 'animate-spin' : ''}`} />
-            <span>{isRunning ? 'Run...' : 'Run'}</span>
+            {isRunning ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Play className="h-3.5 w-3.5 fill-current" />
+            )}
+            <span>{isRunning ? 'Running' : 'Run'}</span>
+            <kbd className="ui-kbd ml-0.5 hidden lg:inline-flex">Ctrl ↵</kbd>
+          </button>
+
+          <div className="mx-0.5 h-6 w-px" style={{ backgroundColor: currentTheme.border }} />
+
+          <button
+            type="button"
+            onClick={onToggleAppearance}
+            className="ui-btn ui-btn--icon"
+            title={light ? 'Switch to dark theme' : 'Switch to light theme'}
+            aria-label={light ? 'Switch to dark theme' : 'Switch to light theme'}
+          >
+            {light ? <Moon className="h-3.5 w-3.5" /> : <Sun className="h-3.5 w-3.5" />}
+          </button>
+
+          <div className="ui-segment hidden lg:inline-flex" role="group" aria-label="Layout">
+            {LAYOUTS.map(({ id, label, icon: Icon }) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setLayoutMode(id)}
+                data-active={layoutMode === id}
+                title={label}
+                aria-label={label}
+                aria-pressed={layoutMode === id}
+                className="w-6 px-0"
+              >
+                <Icon className="h-3.5 w-3.5" />
+              </button>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            onClick={onCopyShareLink}
+            className="ui-btn ui-btn--icon"
+            title="Copy shareable link"
+            aria-label="Copy shareable link"
+          >
+            {isCopiedShare ? (
+              <Check className="h-3.5 w-3.5" style={{ color: '#34d399' }} />
+            ) : (
+              <Share2 className="h-3.5 w-3.5" />
+            )}
           </button>
 
           <button
-            onClick={onClear}
-            className="p-1.5 rounded-lg border text-xs flex items-center justify-center hover:bg-red-500/10 transition-all touch-manipulation"
-            style={{
-              backgroundColor: currentTheme.bg,
-              borderColor: currentTheme.border,
-              color: currentTheme.textMuted
-            }}
-            title="Clear Console Output"
+            type="button"
+            onClick={onDownloadCode}
+            className="ui-btn ui-btn--icon"
+            title={`Download ${fileName}`}
+            aria-label={`Download ${fileName}`}
           >
-            <Trash2 className="w-4 h-4" />
+            <Download className="h-3.5 w-3.5" />
+          </button>
+
+          <button
+            type="button"
+            onClick={onOpenSettingsModal}
+            className="ui-btn ui-btn--icon"
+            title="Settings (Ctrl + ,)"
+            aria-label="Open settings"
+          >
+            <SettingsIcon className="h-3.5 w-3.5" />
+          </button>
+        </div>
+
+        {/* Mobile primary actions */}
+        <div className="flex items-center gap-1.5 lg:hidden">
+          <button
+            type="button"
+            onClick={onToggleAppearance}
+            className="ui-btn ui-btn--icon shrink-0"
+            aria-label={light ? 'Switch to dark theme' : 'Switch to light theme'}
+          >
+            {light ? <Moon className="h-3.5 w-3.5" /> : <Sun className="h-3.5 w-3.5" />}
+          </button>
+
+          <button
+            type="button"
+            onClick={onRun}
+            disabled={isRunning}
+            className="ui-btn ui-btn--primary h-8 shrink-0 px-3"
+            title={`Run ${LANGUAGES[language].label}`}
+          >
+            {isRunning ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Play className="h-3.5 w-3.5 fill-current" />
+            )}
+            <span>{isRunning ? 'Running' : 'Run'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onOpenSettingsModal}
+            className="ui-btn ui-btn--icon shrink-0"
+            aria-label="Open settings"
+          >
+            <SettingsIcon className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
 
-      {/* Middle Controls: Snippets & Quick Run (Desktop) */}
-      <div className="flex items-center gap-2 flex-1 max-w-xl justify-center w-full md:w-auto overflow-x-auto py-0.5 no-scrollbar">
-        {/* Preset Snippets Dropdown */}
-        <div className="relative flex-1 min-w-[130px] max-w-xs">
-          <select
-            aria-label="Load Example Snippet"
-            onChange={(e) => {
-              const selected = snippets.find(s => s.id === e.target.value);
-              if (selected) onSelectSnippet(selected);
-              e.target.value = '';
-            }}
-            defaultValue=""
-            className="w-full text-xs py-1.5 pl-2.5 pr-7 rounded-md outline-none cursor-pointer border transition-all appearance-none truncate"
-            style={{
-              backgroundColor: currentTheme.bg,
-              borderColor: currentTheme.border,
-              color: currentTheme.text
-            }}
-          >
-            <option value="" disabled>⚡ Examples...</option>
-            {snippets.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.title}
-              </option>
-            ))}
-          </select>
-          <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none opacity-50 text-[10px]">
-            ▼
-          </div>
+      {/* Mobile secondary bar */}
+      <div className="flex items-center gap-1.5 px-3 pb-2.5 lg:hidden">
+        <LanguageNav language={language} setLanguage={setLanguage} className="shrink-0" />
+
+        <div className="hidden min-w-0 shrink-0 sm:block">
+          <ExamplesMenu
+            snippets={snippets}
+            language={language}
+            onSelectSnippet={onSelectSnippet}
+            onOpenSnippetsModal={onOpenSnippetsModal}
+            className="w-40"
+          />
         </div>
 
-        {/* Snippets Library Modal Button */}
-        <button
-          onClick={onOpenSnippetsModal}
-          className="px-2.5 py-1.5 rounded-md border text-xs flex items-center gap-1.5 hover:opacity-80 transition-all shrink-0 touch-manipulation"
-          style={{
-            backgroundColor: currentTheme.bg,
-            borderColor: currentTheme.border,
-            color: currentTheme.text
-          }}
-          title="Open Code Snippets Library"
-        >
-          <BookOpen className="w-3.5 h-3.5 text-sky-400" />
-          <span className="text-xs">Snippets</span>
-        </button>
+        <div className="flex-1" />
 
-        {/* Primary Run Button (Desktop only) */}
-        <button
-          onClick={onRun}
-          disabled={isRunning}
-          className="hidden md:flex items-center gap-1.5 px-4 py-1.5 rounded-md font-semibold text-xs shadow-md transition-all active:scale-95 disabled:opacity-50 shrink-0"
-          style={{
-            backgroundColor: currentTheme.accent,
-            color: theme === 'light' ? '#ffffff' : '#000000',
-            boxShadow: `0 2px 10px ${currentTheme.accent}33`
-          }}
-          title="Run JavaScript Code (Ctrl + Enter)"
-        >
-          <Play className={`w-3.5 h-3.5 fill-current ${isRunning ? 'animate-spin' : ''}`} />
-          <span>{isRunning ? 'Running...' : 'Run Code'}</span>
-          <span className="hidden lg:inline text-[10px] opacity-75 font-mono ml-1 px-1 py-0.2 rounded bg-black/10">
-            Ctrl+↵
-          </span>
-        </button>
-
-        {/* Clear Button (Desktop only) */}
-        <button
-          onClick={onClear}
-          className="hidden md:flex p-1.5 rounded-md border text-xs items-center gap-1 hover:bg-red-500/10 hover:border-red-500/40 hover:text-red-400 transition-all shrink-0"
-          style={{
-            backgroundColor: currentTheme.bg,
-            borderColor: currentTheme.border,
-            color: currentTheme.textMuted
-          }}
-          title="Clear Output Console"
-        >
-          <Trash2 className="w-3.5 h-3.5" />
-          <span className="text-xs">Clear</span>
-        </button>
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onOpenSnippetsModal}
+            className="ui-btn ui-btn--icon"
+            title="Snippets library"
+            aria-label="Open snippets library"
+          >
+            <BookOpen className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={onCopyShareLink}
+            className="ui-btn ui-btn--icon"
+            title="Copy shareable link"
+            aria-label="Copy shareable link"
+          >
+            {isCopiedShare ? (
+              <Check className="h-3.5 w-3.5" style={{ color: '#34d399' }} />
+            ) : (
+              <Share2 className="h-3.5 w-3.5" />
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={onDownloadCode}
+            className="ui-btn ui-btn--icon"
+            title={`Download ${fileName}`}
+            aria-label={`Download ${fileName}`}
+          >
+            <Download className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
-      {/* Right Controls: Theme, Layout, Settings, Share */}
-      <div className="flex items-center justify-between md:justify-end gap-1.5 shrink-0 w-full md:w-auto border-t md:border-t-0 pt-1.5 md:pt-0" style={{ borderColor: `${currentTheme.border}66` }}>
-        {/* Mobile Tab Switcher Toggle */}
-        {setMobileTab && (
-          <div 
-            className="flex md:hidden items-center p-0.5 rounded-lg border text-xs"
-            style={{
-              backgroundColor: currentTheme.bg,
-              borderColor: currentTheme.border
-            }}
-          >
+      {/* Mobile editor/console switcher */}
+      {setMobileTab && mobileTab && (
+        <div
+          className="flex items-center gap-1 border-t px-3 py-1.5 md:hidden"
+          style={{ borderColor: currentTheme.border }}
+        >
+          <div className="ui-segment w-full">
             <button
+              type="button"
               onClick={() => setMobileTab('editor')}
-              className={`px-3 py-1 rounded-md flex items-center gap-1 font-semibold transition-all ${
-                mobileTab === 'editor'
-                  ? 'bg-sky-500 text-white shadow-sm'
-                  : 'text-gray-400'
-              }`}
+              data-active={mobileTab === 'editor'}
+              aria-pressed={mobileTab === 'editor'}
+              className="flex-1"
             >
-              <SquareCode className="w-3.5 h-3.5" />
-              <span>Editor</span>
+              <SquareCode className="h-3.5 w-3.5" />
+              Editor
             </button>
             <button
+              type="button"
               onClick={() => setMobileTab('console')}
-              className={`px-3 py-1 rounded-md flex items-center gap-1 font-semibold transition-all ${
-                mobileTab === 'console'
-                  ? 'bg-sky-500 text-white shadow-sm'
-                  : 'text-gray-400'
-              }`}
+              data-active={mobileTab === 'console'}
+              aria-pressed={mobileTab === 'console'}
+              className="flex-1"
             >
-              <Terminal className="w-3.5 h-3.5" />
-              <span>Console</span>
+              <Terminal className="h-3.5 w-3.5" />
+              Console
               {logsCount > 0 && (
-                <span className="ml-0.5 px-1.5 py-0.2 text-[9px] font-bold rounded-full bg-amber-400 text-black">
+                <span
+                  className="rounded-full px-1.5 py-px text-[9px] font-bold"
+                  style={{
+                    backgroundColor: withAlpha(currentTheme.accent, 0.2),
+                    color: currentTheme.accent,
+                  }}
+                >
                   {logsCount}
                 </span>
               )}
             </button>
           </div>
-        )}
-
-        <div className="flex items-center gap-1.5 ml-auto">
-          {/* Theme Selector */}
-          <div className="relative">
-            <select
-              aria-label="Select Theme"
-              value={theme}
-              onChange={(e) => setTheme(e.target.value as ThemeId)}
-              className="text-xs py-1.5 pl-6 pr-2 rounded-md outline-none cursor-pointer border appearance-none transition-all max-w-[100px] sm:max-w-none"
-              style={{
-                backgroundColor: currentTheme.bg,
-                borderColor: currentTheme.border,
-                color: currentTheme.text
-              }}
-            >
-              {Object.values(THEMES).map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-            <Palette className="w-3.5 h-3.5 absolute left-1.5 top-1/2 -translate-y-1/2 opacity-70 pointer-events-none" />
-          </div>
-
-          {/* Desktop Layout Switcher */}
-          <div 
-            className="hidden lg:flex items-center p-0.5 rounded-md border"
-            style={{
-              backgroundColor: currentTheme.bg,
-              borderColor: currentTheme.border
-            }}
-          >
-            <button
-              onClick={() => setLayoutMode('split')}
-              className={`p-1 rounded ${layoutMode === 'split' ? 'bg-white/10 text-white font-bold' : 'text-gray-400 hover:text-gray-200'}`}
-              title="Split Layout (50/50)"
-            >
-              <Columns className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => setLayoutMode('editor-only')}
-              className={`p-1 rounded ${layoutMode === 'editor-only' ? 'bg-white/10 text-white font-bold' : 'text-gray-400 hover:text-gray-200'}`}
-              title="Editor Focus"
-            >
-              <SquareCode className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => setLayoutMode('console-only')}
-              className={`p-1 rounded ${layoutMode === 'console-only' ? 'bg-white/10 text-white font-bold' : 'text-gray-400 hover:text-gray-200'}`}
-              title="Console Focus"
-            >
-              <Terminal className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => setLayoutMode('stacked')}
-              className={`p-1 rounded ${layoutMode === 'stacked' ? 'bg-white/10 text-white font-bold' : 'text-gray-400 hover:text-gray-200'}`}
-              title="Stacked Layout"
-            >
-              <Rows className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          {/* Share Link */}
-          <button
-            onClick={onCopyShareLink}
-            className="p-1.5 rounded-md border text-xs flex items-center gap-1 hover:opacity-80 transition-all touch-manipulation"
-            style={{
-              backgroundColor: currentTheme.bg,
-              borderColor: currentTheme.border,
-              color: currentTheme.text
-            }}
-            title="Share Snippet URL Link"
-          >
-            {isCopiedShare ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Share2 className="w-3.5 h-3.5" />}
-          </button>
-
-          {/* Download JS File */}
-          <button
-            onClick={onDownloadCode}
-            className="p-1.5 rounded-md border text-xs flex items-center gap-1 hover:opacity-80 transition-all touch-manipulation"
-            style={{
-              backgroundColor: currentTheme.bg,
-              borderColor: currentTheme.border,
-              color: currentTheme.text
-            }}
-            title="Download script.js"
-          >
-            <Download className="w-3.5 h-3.5" />
-          </button>
-
-          {/* Settings Modal Toggle */}
-          <button
-            onClick={onOpenSettingsModal}
-            className="p-1.5 rounded-md border text-xs flex items-center gap-1 hover:opacity-80 transition-all touch-manipulation"
-            style={{
-              backgroundColor: currentTheme.bg,
-              borderColor: currentTheme.border,
-              color: currentTheme.text
-            }}
-            title="Editor Settings"
-          >
-            <Settings className="w-3.5 h-3.5" />
-          </button>
         </div>
-      </div>
+      )}
     </header>
   );
 };
