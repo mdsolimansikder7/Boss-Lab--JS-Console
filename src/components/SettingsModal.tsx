@@ -219,6 +219,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             </SettingRow>
 
+            <SettingRow
+              title="Auto suggestions"
+              description="Show code completions automatically while typing. Turn off to open them with Ctrl+Space. Shortcut: Ctrl+Alt+S."
+            >
+              <Toggle
+                checked={settings.autoSuggestions}
+                onChange={() => updateSetting('autoSuggestions', !settings.autoSuggestions)}
+                label="Toggle auto suggestions"
+              />
+            </SettingRow>
+
             <SettingRow title="Auto-close brackets" description="Automatically insert closing brackets and quotes">
               <Toggle
                 checked={settings.autoCloseBrackets}

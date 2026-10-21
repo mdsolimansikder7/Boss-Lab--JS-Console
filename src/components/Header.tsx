@@ -40,6 +40,8 @@ interface HeaderProps {
   onCopyShareLink: () => void;
   isCopiedShare: boolean;
   isRunning: boolean;
+  autoSuggestions: boolean;
+  onToggleAutoSuggestions: () => void;
   mobileTab?: 'editor' | 'console';
   setMobileTab?: (tab: 'editor' | 'console') => void;
   logsCount?: number;
@@ -204,6 +206,28 @@ const ExamplesMenu: React.FC<{
   );
 };
 
+const AutoSuggestButton: React.FC<{
+  enabled: boolean;
+  onToggle: () => void;
+  className?: string;
+}> = ({ enabled, onToggle, className = '' }) => (
+  <button
+    type="button"
+    onClick={onToggle}
+    data-active={enabled}
+    aria-pressed={enabled}
+    aria-label={enabled ? 'Turn off auto suggestions' : 'Turn on auto suggestions'}
+    title={
+      enabled
+        ? 'Auto suggestions: On — completions appear while typing (Ctrl+Alt+S)'
+        : 'Auto suggestions: Off — press Ctrl+Space or Ctrl+Alt+S'
+    }
+    className={`ui-btn ui-btn--icon shrink-0 ${className}`}
+  >
+    <Sparkles className="h-3.5 w-3.5" />
+  </button>
+);
+
 const LanguageNav: React.FC<{
   language: LanguageId;
   setLanguage: (language: LanguageId) => void;
@@ -257,6 +281,8 @@ export const Header: React.FC<HeaderProps> = ({
   onCopyShareLink,
   isCopiedShare,
   isRunning,
+  autoSuggestions,
+  onToggleAutoSuggestions,
   mobileTab,
   setMobileTab,
   logsCount = 0,
@@ -370,6 +396,8 @@ export const Header: React.FC<HeaderProps> = ({
           >
             {light ? <Moon className="h-3.5 w-3.5" /> : <Sun className="h-3.5 w-3.5" />}
           </button>
+
+          <AutoSuggestButton enabled={autoSuggestions} onToggle={onToggleAutoSuggestions} />
 
           <div className="ui-segment hidden lg:inline-flex" role="group" aria-label="Layout">
             {LAYOUTS.map(({ id, label, icon: Icon }) => (
@@ -517,7 +545,7 @@ export const Header: React.FC<HeaderProps> = ({
           className="flex items-center gap-1 border-t px-3 py-1.5 lg:hidden"
           style={{ borderColor: currentTheme.border }}
         >
-          <div className="ui-segment w-full">
+          <div className="ui-segment min-w-0 flex-1">
             <button
               type="button"
               onClick={() => setMobileTab('editor')}
@@ -550,6 +578,11 @@ export const Header: React.FC<HeaderProps> = ({
               )}
             </button>
           </div>
+          <AutoSuggestButton
+            enabled={autoSuggestions}
+            onToggle={onToggleAutoSuggestions}
+            className="h-6 w-6"
+          />
         </div>
       )}
     </header>

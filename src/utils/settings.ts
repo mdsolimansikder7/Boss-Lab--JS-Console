@@ -4,6 +4,7 @@ import { loadJSON, STORAGE_KEYS } from './storage';
 export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   fontSize: 14,
   tabSize: 2,
+  autoSuggestions: true,
   autoCloseBrackets: true,
   wordWrap: false,
   lineNumbers: true,

@@ -55,6 +55,7 @@ export interface ThemeConfig {
 export interface EditorSettings {
   fontSize: number;
   tabSize: number;
+  autoSuggestions: boolean;
   autoCloseBrackets: boolean;
   wordWrap: boolean;
   lineNumbers: boolean;

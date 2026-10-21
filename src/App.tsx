@@ -261,6 +261,9 @@ export default function App() {
         event.preventDefault();
         setIsSettingsModalOpen((open) => !open);
         setIsSnippetsModalOpen(false);
+      } else if (event.altKey && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        setSettings((current) => ({ ...current, autoSuggestions: !current.autoSuggestions }));
       }
     };
 
@@ -417,6 +420,10 @@ export default function App() {
     setTheme((current) => (current === 'light' ? lastDarkThemeRef.current : 'light'));
   }, []);
 
+  const handleToggleAutoSuggestions = useCallback(() => {
+    setSettings((current) => ({ ...current, autoSuggestions: !current.autoSuggestions }));
+  }, []);
+
   const isDesktop = useMediaQuery('(min-width: 1024px)');
   // Below 1024px the editor and console share one panel with tabs, so the saved
   // desktop layout (split/stacked/focus) must not hide one of them.
@@ -457,6 +464,8 @@ export default function App() {
         onCopyShareLink={handleCopyShareLink}
         isCopiedShare={isCopiedShare}
         isRunning={isRunning}
+        autoSuggestions={settings.autoSuggestions}
+        onToggleAutoSuggestions={handleToggleAutoSuggestions}
         mobileTab={mobileTab}
         setMobileTab={setMobileTab}
         logsCount={logs.filter((log) => log.type !== 'clear').length}

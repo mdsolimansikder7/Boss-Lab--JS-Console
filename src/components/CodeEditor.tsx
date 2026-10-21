@@ -558,16 +558,19 @@ export const CodeEditor = forwardRef<CodeEditorRef, CodeEditorProps>(
 
               // VS Code-style IntelliSense: suggestions while typing,
               // automatic member lists after `.`, signature help, snippets.
-              quickSuggestions: { other: true, comments: false, strings: false },
+              // Turning auto suggestions off keeps Ctrl+Space working.
+              quickSuggestions: settings.autoSuggestions
+                ? { other: true, comments: false, strings: false }
+                : false,
               quickSuggestionsDelay: 10,
-              suggestOnTriggerCharacters: true,
+              suggestOnTriggerCharacters: settings.autoSuggestions,
               acceptSuggestionOnEnter: 'on',
               acceptSuggestionOnCommitCharacter: true,
               tabCompletion: 'on',
               snippetSuggestions: 'top',
               suggestSelection: 'first',
               wordBasedSuggestions: 'currentDocument',
-              parameterHints: { enabled: true, cycle: true },
+              parameterHints: { enabled: settings.autoSuggestions, cycle: true },
               suggest: {
                 showMethods: true,
                 showFunctions: true,
