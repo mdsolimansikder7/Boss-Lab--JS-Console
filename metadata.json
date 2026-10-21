@@ -1,0 +1,6 @@
+{
+  "name": "Boss Lab",
+  "description": "Boss Lab - Interactive JavaScript console & code runner with live line numbers, object inspectors, execution timing, and customizable themes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
