@@ -109,6 +109,7 @@ export default function App() {
   const [fileNames, setFileNames] = useState<Record<LanguageId, string>>(buildInitialFileNames);
 
   const code = codeMap[language];
+  const [stdinInput, setStdinInput] = useState('');
   const fileName = fileNames[language];
 
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -210,18 +211,23 @@ export default function App() {
     // Show output immediately on compact/tabbed layouts.
     if (window.innerWidth < 1024) setMobileTab('console');
 
-    const result = await runCode(language, code, (entry) => {
-      // Ignore log callbacks from timers belonging to an older run.
-      if (runIdRef.current !== runId) return;
+    const result = await runCode(
+      language,
+      code,
+      (entry) => {
+        // Ignore log callbacks from timers belonging to an older run.
+        if (runIdRef.current !== runId) return;
 
-      if (entry.type === 'clear') {
-        setLogs([]);
-        return;
-      }
+        if (entry.type === 'clear') {
+          setLogs([]);
+          return;
+        }
 
-      setLogs((prev) => [...prev, entry]);
-      if (entry.type === 'error' && entry.line) setErrorLine(entry.line);
-    });
+        setLogs((prev) => [...prev, entry]);
+        if (entry.type === 'error' && entry.line) setErrorLine(entry.line);
+      },
+      stdinInput
+    );
 
     if (runIdRef.current !== runId) return;
 
@@ -233,7 +239,8 @@ export default function App() {
         ? `Finished in ${result.executionTimeMs} ms`
         : `Error after ${result.executionTimeMs} ms`
     );
-  }, [code, language]);
+    // stdinInput must be in this list, otherwise the Input box value is never sent
+  }, [code, language, stdinInput]);
 
   runRef.current = handleRunCode;
 
@@ -513,6 +520,29 @@ export default function App() {
             style={{ borderColor: currentThemeConfig.border }}
           >
             <div className="min-h-0 flex-1 overflow-hidden">
+              {/* Input box: only for Python, C++ and C (JavaScript does not need stdin) */}
+              {language !== 'javascript' && (
+                <>
+                  <label
+                    className="block px-2 py-1 text-xs font-semibold"
+                    style={{ color: currentThemeConfig.textMuted }}
+                  >
+                    Input (one value per line)
+                  </label>
+                  <textarea
+                    value={stdinInput}
+                    onChange={(e) => setStdinInput(e.target.value)}
+                    placeholder={'Program input (stdin)...\n10\n25'}
+                    className="w-full resize-none border-b p-2 font-mono text-xs"
+                    rows={3}
+                    style={{
+                      backgroundColor: currentThemeConfig.bg,
+                      color: currentThemeConfig.text,
+                      borderColor: currentThemeConfig.border,
+                    }}
+                  />
+                </>
+              )}
               <ConsoleOutput
                 logs={logs}
                 onClear={handleClearOutput}

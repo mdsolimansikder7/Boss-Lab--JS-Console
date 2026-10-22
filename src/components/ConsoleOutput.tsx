@@ -30,6 +30,8 @@ interface ConsoleOutputProps {
   executionTime?: number;
   fontSize: number;
   language: LanguageId;
+  /** Called when the user presses Enter in the inline input bar (C / C++ / Python). */
+  onSubmitInput?: (value: string) => void;
 }
 
 type FilterType = 'all' | 'log' | 'warn' | 'error' | 'table';
@@ -49,6 +51,7 @@ export const ConsoleOutput: React.FC<ConsoleOutputProps> = ({
   executionTime,
   fontSize,
   language,
+  onSubmitInput,
 }) => {
   const [filterType, setFilterType] = useState<FilterType>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -56,6 +59,7 @@ export const ConsoleOutput: React.FC<ConsoleOutputProps> = ({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [expandedKeys, setExpandedKeys] = useState<Record<string, boolean>>({});
   const [showJump, setShowJump] = useState(false);
+  const [inputValue, setInputValue] = useState('');
 
   const listRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -63,6 +67,15 @@ export const ConsoleOutput: React.FC<ConsoleOutputProps> = ({
   const rowCopiedTimer = useRef<number | undefined>(undefined);
 
   const isLight = theme.id === 'light';
+
+  // JavaScript has its own REPL, so the inline stdin bar is only for remote languages.
+  const canType = language !== 'javascript' && Boolean(onSubmitInput);
+
+  const handleSubmitInput = () => {
+    if (!canType) return;
+    onSubmitInput?.(inputValue);
+    setInputValue('');
+  };
 
   useEffect(() => {
     return () => {
@@ -675,6 +688,39 @@ export const ConsoleOutput: React.FC<ConsoleOutputProps> = ({
           })
         )}
       </div>
+
+      {/* Inline stdin input */}
+      {canType && (
+        <div
+          className="flex shrink-0 items-center gap-2 border-t px-3 py-1.5 font-mono"
+          style={{
+            backgroundColor: theme.panelBg,
+            borderColor: theme.border,
+            fontSize: `${fontSize}px`,
+          }}
+        >
+          <span className="select-none font-bold" style={{ color: theme.accent }}>
+            ›
+          </span>
+          <input
+            type="text"
+            value={inputValue}
+            onChange={(event) => setInputValue(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                handleSubmitInput();
+              }
+            }}
+            placeholder="Type input and press Enter…"
+            aria-label="Program input"
+            className="min-w-0 flex-1 bg-transparent outline-none"
+            style={{ color: theme.text }}
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </div>
+      )}
 
       {/* Jump to latest */}
       {showJump && filteredLogs.length > 0 && (
